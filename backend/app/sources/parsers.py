@@ -1,13 +1,13 @@
-"""Per-portal extraction from alert emails.
+﻿"""Per-portal extraction from alert emails.
 
 Each portal formats its alerts differently, so each gets its own extractor. All
 of them return the same listing dict. The generic fallback handles anything
-unrecognised — it still finds a price and an area most of the time, and whatever
+unrecognised â€” it still finds a price and an area most of the time, and whatever
 it misses you fix in the drawer.
 
 KNOWN GAP: these were tested against alert emails reconstructed from what the
 portals publish, never against genuine ones. Expect the first real alerts to land
-with a field or two missing. Do not rewrite speculatively — wait for a real alert
+with a field or two missing. Do not rewrite speculatively â€” wait for a real alert
 from each portal, then tighten against actual text.
 """
 from __future__ import annotations
@@ -18,14 +18,17 @@ from typing import Any, Callable
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"[ \t\xa0]+")
 
-PRICE_RE = re.compile(r"(\d{1,3}(?:[ .\u00a0]\d{3})+|\d{3,7})\s*(?:EUR|€|Eur)", re.I)
-AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:kv\.?\s*m|m2|m²)", re.I)
-PLOT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:a\b|ar[ųu]|arai|aro)", re.I)
+# The optional decimal tail matters: portals render "60000,00 €", and without
+# it the currency token no longer follows the digits and nothing matches.
+PRICE_RE = re.compile(
+    r"(\d{1,3}(?:[ . ]\d{3})+|\d{3,8})(?:[.,]\d{1,2})?\s*(?:EUR|€|Eur)", re.I)
+AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:kv\.?\s*m|m2|mÂ²)", re.I)
+PLOT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:a\b|ar[Å³u]|arai|aro)", re.I)
 HA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*ha\b", re.I)
-MUNI_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:r\.|rajon)", re.U)
-CITY_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:m\.\s*sav|miesto sav)", re.U)
+MUNI_RE = re.compile(r"([A-ZÄ„ÄŒÄ˜Ä–Ä®Å Å²ÅªÅ½][a-zÄ…ÄÄ™Ä—Ä¯Å¡Å³Å«Å¾]+)\s*(?:r\.|rajon)", re.U)
+CITY_RE = re.compile(r"([A-ZÄ„ÄŒÄ˜Ä–Ä®Å Å²ÅªÅ½][a-zÄ…ÄÄ™Ä—Ä¯Å¡Å³Å«Å¾]+)\s*(?:m\.\s*sav|miesto sav)", re.U)
 CAD_RE = re.compile(r"\b(\d{4}[/\-]\d{4}\s*[:\-/]\s*\d{3,5})\b")
-LOCALITY_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+(?:ių|ų|os|ai|iai|ė|as))\s*k\.", re.U)
+LOCALITY_RE = re.compile(r"([A-ZÄ„ÄŒÄ˜Ä–Ä®Å Å²ÅªÅ½][a-zÄ…ÄÄ™Ä—Ä¯Å¡Å³Å«Å¾]+(?:iÅ³|Å³|os|ai|iai|Ä—|as))\s*k\.", re.U)
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
 
@@ -94,7 +97,7 @@ def parse_evarzytynes(text: str) -> dict[str, Any]:
     d["url"] = _first_url(text, "evarzytynes.lt")
     d["title"] = _title(text)
     # Auction notices carry a start price and an end date.
-    m = re.search(r"(?:pradin[ėe]\s*(?:pardavimo\s*)?kaina)\D{0,20}"
+    m = re.search(r"(?:pradin[Ä—e]\s*(?:pardavimo\s*)?kaina)\D{0,20}"
                   r"(\d{1,3}(?:[ .\u00a0]\d{3})+|\d{3,7})", text, re.I)
     if m:
         d["price_eur"] = _f(m)
@@ -178,3 +181,4 @@ def split_listings(text: str) -> list[str]:
             seen.add(chunk[:80])
             out.append(chunk)
     return out or [text]
+
