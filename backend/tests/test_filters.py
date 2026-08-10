@@ -280,3 +280,16 @@ def test_partial_keyword_group_is_near():
 
 def test_match_all_still_excludes_near_misses():
     assert f.match_all({**GOOD, "price_eur": 21000}, [PROFILE]) == []
+
+
+def test_a_soft_miss_without_a_delta_can_never_be_near():
+    """delta is None means "how far outside is unknown". _state must reject
+    on that rather than let it through as a near miss: showing a listing in
+    the Beveik tier on the strength of a distance nobody measured is exactly
+    the confidently-wrong-value failure. Asserted directly on _state so a
+    future reordering of the guard cannot pass silently."""
+    unknown = f.Miss("price", f.SOFT, "kaina nežinoma", None)
+    assert f._state([unknown], PROFILE, GOOD) == f.REJECT
+
+    known = f.Miss("price", f.SOFT, "kaina 21 000 > 20 000 EUR", 1000)
+    assert f._state([known], PROFILE, {**GOOD, "price_eur": 21000}) == f.NEAR

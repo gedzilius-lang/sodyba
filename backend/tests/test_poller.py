@@ -26,12 +26,18 @@ def _reset():
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
-    """The crawl delay is already asserted to come from the registry
-    elsewhere; sleeping for real here (2s x 3 listings, repeatedly) only
-    slows the suite down and buys no additional correctness signal."""
-    async def _fast_sleep(_seconds):
+    """Sleeping for real here (2s x 3 listings, repeatedly) only slows the
+    suite down. The durations are captured rather than discarded: politeness
+    toward a site that permits crawling is a real obligation, and nothing
+    asserted that the delay actually came from the registry. Tests that want
+    the record take this fixture by name."""
+    slept: list[float] = []
+
+    async def _fast_sleep(seconds):
+        slept.append(seconds)
         return None
     monkeypatch.setattr(poller.asyncio, "sleep", _fast_sleep)
+    return slept
 
 
 def _fake_fetch(calls):
@@ -137,3 +143,14 @@ def test_a_batch_larger_than_the_limit_is_caught_up_not_skipped():
     seen_ids = {int(u.rsplit("-id-", 1)[1])
                for u in calls1 + calls2 if "/skelbimas/" in u}
     assert seen_ids == set(ids)
+
+
+def test_the_pause_between_fetches_is_the_registry_crawl_delay(_no_sleep):
+    """The registry records what each site's robots.txt permits. If the
+    poller pauses for anything other than that declared delay, the policy
+    table is decoration — so assert the value, not merely that it slept."""
+    asyncio.run(poller.poll_source("rinka", fetch=_fake_fetch([])))
+    expected = reg.get("rinka").crawl_delay_s
+    assert _no_sleep, "the poller must pause between detail fetches"
+    assert set(_no_sleep) == {expected}, \
+        f"every pause must be the declared {expected}s, got {_no_sleep}"
