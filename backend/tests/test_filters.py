@@ -63,7 +63,12 @@ NATURE = {**PROFILE, "max_lake_m": 300, "max_river_m": 500, "min_lake_ha": 5}
 
 
 def _with(lake=None, river=None):
-    return {**GOOD, "nature": {"nearest_lake": lake, "nearest_river": river}}
+    # `located` is what advisor.assess_nature always sets on a measured
+    # result; without it these fixtures described a shape the real code
+    # never produces, and the location-unknown guard below could not tell
+    # them apart from a listing nobody managed to place.
+    return {**GOOD, "nature": {"located": True,
+                               "nearest_lake": lake, "nearest_river": river}}
 
 
 def test_missing_river_is_forgiven_when_the_lake_qualifies():
@@ -99,6 +104,39 @@ def test_lake_below_minimum_size_misses():
                          river={"distance_m": 100}), NATURE)
     assert [m.field for m in r.misses] == ["min_lake_ha"]
     assert r.state == f.REJECT
+
+
+@pytest.mark.parametrize("nature", [{}, {"located": False, "note": "x"}])
+def test_unlocated_listing_is_not_told_there_is_no_lake(nature):
+    """assess_nature returns {"located": False} when the place cannot be
+    resolved or the gazetteer is empty — reachable on every listing during a
+    fresh install, since the layer download and the first mailbox poll run
+    concurrently. Reporting that as "ežero nerasta" asserts something false
+    about the world and discards the listing on the strength of it."""
+    r = f.evaluate({**GOOD, "nature": nature}, NATURE)
+    texts = [m.text for m in r.misses]
+    assert not any("nerasta" in t for t in texts), \
+        "missing data must not be reported as a missing lake"
+    assert any("vietos nustatyti nepavyko" in t for t in texts)
+    assert len([m for m in r.misses if m.field in ("max_lake_m", "max_river_m",
+                                                   "min_lake_ha")]) == 1
+
+
+@pytest.mark.parametrize("nature", [{}, {"located": False, "note": "x"}])
+def test_unlocated_listing_is_still_kept_out_of_the_near_tier(nature):
+    r = f.evaluate({**GOOD, "nature": nature}, NATURE)
+    assert r.state == f.REJECT
+
+
+def test_a_located_listing_with_real_nature_data_is_unaffected():
+    r = f.evaluate(_with(lake={"distance_m": 100, "size": 9},
+                         river={"distance_m": 200}), NATURE)
+    assert r.misses == []
+    assert r.state == f.MATCH
+
+
+def test_a_profile_that_does_not_gate_on_nature_ignores_missing_nature():
+    assert f.evaluate({**GOOD, "nature": {}}, PROFILE).misses == []
 
 
 def test_radius_profile_hard_misses_when_the_place_cannot_be_located():

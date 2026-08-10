@@ -374,9 +374,24 @@ def _radius_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Mis
 
 def _nature_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Miss]:
     nature = listing.get("nature") or {}
+    ml = profile.get("max_lake_m")
+    mr = profile.get("max_river_m")
+
+    # "We could not place it" is not "there is no lake there". assess_nature
+    # returns {"located": False} whenever the place cannot be resolved or the
+    # gazetteer is still empty — and on a fresh install that is every listing,
+    # because main.py starts the layer download and the first mailbox poll
+    # concurrently. Reading nearest_lake as None there asserted something
+    # false about the world and threw the listing away for it. Say what is
+    # actually known, in the same words _radius_misses uses for the same
+    # situation. Still hard: a listing must not reach the Beveik tier on the
+    # strength of data nobody has.
+    if (ml or mr) and not nature.get("located"):
+        return [Miss("max_lake_m" if ml else "max_river_m", HARD,
+                     "vietos nustatyti nepavyko, o profilis riboja atstumu iki vandens")]
+
     lake, river = nature.get("nearest_lake"), nature.get("nearest_river")
     out: list[Miss] = []
-    ml = profile.get("max_lake_m")
     if ml:
         if not lake:
             out.append(Miss("max_lake_m", SOFT, "ežero nerasta"))
@@ -391,7 +406,6 @@ def _nature_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Mis
                                 f"ežeras {lake['distance_m']/1000:.1f} km "
                                 f"> {ml/1000:.1f} km",
                                 lake["distance_m"] - ml))
-    mr = profile.get("max_river_m")
     if mr:
         lake_ok = bool(ml and lake and lake["distance_m"] <= ml)
         if not river:
