@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="lt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sodyba Radar</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>Sodyba Radar</h1>
+      <p class="sub">Kandidatų vertinimas · Lietuva</p>
+    </div>
+  </div>
+  <div class="tallies" id="tallies"></div>
+  <div class="status">
+    <span class="stat-line" id="refreshStatus">Kraunama…</span>
+    <button class="btn btn-ghost" id="btnRefresh">Atnaujinti registro duomenis</button>
+    <button class="btn" id="btnAdd">Pridėti objektą</button>
+  </div>
+</header>
+
+<main class="shell">
+
+  <aside class="rail" id="rail">
+    <section class="rail-block">
+      <h2 class="eyebrow">Filtrai</h2>
+
+      <label class="field">
+        <span>Paieška</span>
+        <input type="search" id="fQuery" placeholder="vietovė, pastaba…">
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Kaina nuo</span>
+          <input type="number" id="fMinPrice" min="0" step="500" placeholder="0">
+        </label>
+        <label class="field">
+          <span>Kaina iki</span>
+          <input type="number" id="fMaxPrice" min="0" step="500" placeholder="20000">
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Savivaldybė</span>
+        <select id="fMuni"><option value="">Visa Lietuva</option></select>
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Netoli (miestas/kaimas)</span>
+          <input id="fNear" placeholder="Utena">
+        </label>
+        <label class="field">
+          <span>Spindulys (km)</span>
+          <input type="number" id="fRadius" min="1" step="5" placeholder="40">
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Iki ežero (km)</span>
+          <input type="number" id="fLake" min="0" step="0.5" placeholder="—">
+        </label>
+        <label class="field">
+          <span>Iki upės (km)</span>
+          <input type="number" id="fRiver" min="0" step="0.5" placeholder="—">
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Paieškos profilis</span>
+        <select id="fProfile"><option value="">Visi profiliai</option></select>
+      </label>
+
+      <label class="field">
+        <span>Verdiktas</span>
+        <select id="fVerdict">
+          <option value="">Visi</option>
+          <option value="shortlist">Trumpasis sąrašas</option>
+          <option value="weak">Per silpnas</option>
+          <option value="over_budget">Virš biudžeto</option>
+          <option value="incomplete">Neįvertintas</option>
+          <option value="rejected">Atmestas</option>
+        </select>
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Min. balas</span>
+          <input type="number" id="fMinScore" min="0" max="10" step="0.5" placeholder="0">
+        </label>
+        <label class="field">
+          <span>Visi kaštai iki</span>
+          <input type="number" id="fMaxCost" min="0" step="1000" placeholder="—">
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Rikiuoti</span>
+        <select id="fSort">
+          <option value="eur_per_point">EUR už balo tašką</option>
+          <option value="score">Balas</option>
+          <option value="price">Kaina</option>
+          <option value="total_cost">Visi kaštai</option>
+          <option value="updated">Naujausi</option>
+        </select>
+      </label>
+
+      <label class="check"><input type="checkbox" id="fArchived"><span>Rodyti archyvuotus</span></label>
+      <button class="btn btn-ghost full" id="btnClear">Išvalyti filtrus</button>
+    </section>
+
+    <section class="rail-block">
+      <h2 class="eyebrow">Paieškos profiliai</h2>
+      <p class="hint">Robotas tikrina gaunamus skelbimus pagal įjungtus profilius. Išjungtas profilis nepraleidžia nieko.</p>
+      <div id="profiles"></div>
+      <div class="ingest-bar">
+        <span class="stat-line" id="ingestStatus">—</span>
+        <button class="btn btn-ghost" id="btnPoll">Tikrinti dabar</button>
+      </div>
+      <button class="btn btn-ghost full" id="btnResetProfiles">Grąžinti numatytuosius</button>
+    </section>
+
+    <section class="rail-block">
+      <h2 class="eyebrow">Svoriai</h2>
+      <p class="hint">Keisk svorius — visos juostos persidėlios iš karto.</p>
+      <div id="weights"></div>
+      <div class="weight-total"><span>Suma</span><b id="weightSum">100%</b></div>
+    </section>
+
+    <section class="rail-block">
+      <h2 class="eyebrow">Prielaidos</h2>
+      <label class="field">
+        <span>Biudžeto riba (EUR)</span>
+        <input type="number" id="sBudget" min="0" step="1000">
+      </label>
+      <label class="field">
+        <span>Minimalus balas</span>
+        <input type="number" id="sMinScore" min="0" max="10" step="0.5">
+      </label>
+      <label class="field">
+        <span>Rezervas (%)</span>
+        <input type="number" id="sContingency" min="0" max="100" step="5">
+      </label>
+      <button class="btn full" id="btnSaveSettings">Išsaugoti prielaidas</button>
+    </section>
+  </aside>
+
+  <div class="content">
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Kandidatai</h2>
+        <span class="count" id="candCount"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid" id="candTable">
+          <thead>
+            <tr>
+              <th>Nr.</th><th>Vietovė</th><th class="num">Kaina</th>
+              <th class="core-col">Vertinimo pjūvis</th>
+              <th class="num">Balas</th><th class="num">Visi kaštai</th>
+              <th>Gamta</th><th class="num">EUR/tšk.</th><th>Verdiktas</th>
+            </tr>
+          </thead>
+          <tbody id="candBody"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="candEmpty" hidden>Nėra objektų pagal šiuos filtrus. Pridėk objektą arba atlaisvink filtrus.</p>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Pasiūlos fondas</h2>
+        <span class="count" id="marketNote"></span>
+      </div>
+      <div class="table-wrap">
+        <table class="grid" id="mktTable">
+          <thead>
+            <tr>
+              <th>Savivaldybė</th><th class="num">Vienbučiai</th><th class="num">Elektra+vanduo</th>
+              <th class="num">% el.+vand.</th><th class="num">% iki 1945</th>
+              <th class="num">Rąstiniai</th><th class="num">Retumo indeksas</th>
+            </tr>
+          </thead>
+          <tbody id="mktBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<!-- Detail drawer -->
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Objekto detalės">
+  <div class="drawer-head">
+    <div>
+      <span class="eyebrow" id="dRef"></span>
+      <h2 id="dTitle">Naujas objektas</h2>
+    </div>
+    <button class="btn btn-ghost" id="btnClose">Uždaryti</button>
+  </div>
+
+  <div class="drawer-body">
+    <nav class="tabs" role="tablist">
+      <button class="tab is-on" data-tab="facts">Faktai</button>
+      <button class="tab" data-tab="flags">STOP</button>
+      <button class="tab" data-tab="scores">Balai</button>
+      <button class="tab" data-tab="costs">Kaštai</button>
+      <button class="tab" data-tab="checks">Patikra</button>
+      <button class="tab" data-tab="advice">Vertinimas</button>
+      <button class="tab" data-tab="paste">Įklijuoti</button>
+      <button class="tab" data-tab="profile">Profilis</button>
+    </nav>
+
+    <div class="tabpane is-on" data-pane="facts">
+      <div class="grid2">
+        <label class="field"><span>Pavadinimas</span><input id="dName"></label>
+        <label class="field"><span>Šaltinis</span>
+          <select id="dSource">
+            <option value="evarzytynes">evarzytynes.lt</option>
+            <option value="turtas">aukcionai.turtas.lt</option>
+            <option value="aruodas">aruodas.lt</option>
+            <option value="domoplius">domoplius.lt</option>
+            <option value="alio">alio.lt</option>
+            <option value="facebook">Facebook grupė</option>
+            <option value="manual">Kita</option>
+          </select></label>
+        <label class="field"><span>Nuoroda</span><input id="dUrl" type="url" placeholder="https://"></label>
+        <label class="field"><span>Savivaldybė</span><select id="dMuni"></select></label>
+        <label class="field"><span>Vietovė</span><input id="dLocality" placeholder="Kirdeikių k."></label>
+        <label class="field"><span>Unikalus Nr.</span><input id="dCad" placeholder="0000/0000:0000"></label>
+        <label class="field"><span>Kaina / pradinė (EUR)</span><input id="dPrice" type="number" min="0" step="100"></label>
+        <label class="field"><span>Namo plotas (m²)</span><input id="dArea" type="number" min="0" step="0.1"></label>
+        <label class="field"><span>Sklypas (a)</span><input id="dPlot" type="number" min="0" step="0.1"></label>
+        <label class="field"><span>Varžytynių pabaiga</span><input id="dEnds" type="date"></label>
+      </div>
+      <label class="field"><span>Pastabos</span><textarea id="dNotes" rows="5"></textarea></label>
+    </div>
+
+    <div class="tabpane" data-pane="flags">
+      <p class="hint">Bet kuri pažymėta vėliava atmeta objektą. Tikrink jas pirmiausia — tai kainuoja 5 EUR ir 20 minučių.</p>
+      <div id="dFlags"></div>
+    </div>
+
+    <div class="tabpane" data-pane="scores">
+      <p class="hint">0 = netinka, 10 = idealu. Visi dešimt turi būti užpildyti, kad balas būtų skaičiuojamas. Vanduo ir miškas/vanduo užpildomi automatiškai po „Nustatyti vietą“.</p>
+      <div id="dScores"></div>
+    </div>
+
+    <div class="tabpane" data-pane="costs">
+      <p class="hint">Realios sąmatos, ne spėjimai. ESO prijungimas ir gręžinys yra dažniausios biudžeto bombos.</p>
+      <div id="dCosts"></div>
+      <div class="cost-total"><span>Viso su rezervu</span><b id="dCostTotal">—</b></div>
+    </div>
+
+    <div class="tabpane" data-pane="checks">
+      <p class="hint">Vykdyk eilės tvarka. Pirmi trys žingsniai atmeta daugumą objektų.</p>
+      <div id="dChecks"></div>
+    </div>
+
+    <div class="tabpane" data-pane="advice">
+      <div class="advice-head">
+        <button class="btn" id="btnLocate">Nustatyti vietą ir išmatuoti gamtą</button>
+        <button class="btn btn-ghost" id="btnAdvice">Parengti vertinimą</button>
+      </div>
+      <div id="natureBox"></div>
+      <div id="adviceBox"></div>
+    </div>
+
+    <div class="tabpane" data-pane="paste">
+      <p class="hint">evarzytynes.lt ir skelbimų portalai draudžia automatinę prieigą. Užsiprenumeruok jų pačių el. pašto pranešimus (jie ateis automatiškai) arba įklijuok tekstą čia — kaina, plotas, savivaldybė ir unikalus Nr. bus ištraukti.</p>
+      <label class="field"><span>Skelbimo tekstas</span><textarea id="pText" rows="10" placeholder="Įklijuok visą skelbimo tekstą…"></textarea></label>
+      <label class="field"><span>Nuoroda</span><input id="pUrl" type="url" placeholder="https://"></label>
+      <button class="btn full" id="btnPaste">Sukurti objektą iš teksto</button>
+    </div>
+
+    <div class="tabpane" data-pane="profile">
+      <p class="hint">Redaguok pasirinktą profilį. Testas parodo, ar konkretus skelbimas jį praeitų ir kodėl ne.</p>
+      <label class="field"><span>Profilis</span><select id="epPick"></select></label>
+      <div class="grid2">
+        <label class="field"><span>Pavadinimas</span><input id="epName"></label>
+        <label class="check"><input type="checkbox" id="epEnabled"><span>Įjungtas</span></label>
+        <label class="field"><span>Kaina nuo (EUR)</span><input id="epMinPrice" type="number" min="0" step="500"></label>
+        <label class="field"><span>Kaina iki (EUR)</span><input id="epMaxPrice" type="number" min="0" step="500"></label>
+        <label class="field"><span>Min. sklypas (a)</span><input id="epMinPlot" type="number" min="0" step="5"></label>
+        <label class="field"><span>Min. plotas (m²)</span><input id="epMinArea" type="number" min="0" step="5"></label>
+      </div>
+      <label class="field"><span>Savivaldybės (kableliais; tuščia = visa Lietuva)</span><textarea id="epMunis" rows="2"></textarea></label>
+      <label class="field"><span>Bent vienas raktažodis</span><textarea id="epAny" rows="2"></textarea></label>
+      <label class="field"><span>Privalomi raktažodžiai</span><textarea id="epAll" rows="2"></textarea></label>
+      <label class="field"><span>Draudžiami raktažodžiai</span><textarea id="epNot" rows="2"></textarea></label>
+      <label class="field"><span>Šaltiniai (tuščia = visi)</span><input id="epSources" placeholder="evarzytynes, turtas"></label>
+
+      <h3 class="eyebrow" style="margin-top:18px">Geografija ir gamta</h3>
+      <div class="grid2">
+        <label class="field"><span>Centrai (kableliais)</span><input id="epCentres" placeholder="Utena, Anykščiai"></label>
+        <label class="field"><span>Spindulys (km)</span><input id="epRadius" type="number" min="1" step="5"></label>
+        <label class="field"><span>Iki ežero ne daugiau (m)</span><input id="epLake" type="number" min="0" step="100"></label>
+        <label class="field"><span>Iki upės ne daugiau (m)</span><input id="epRiver" type="number" min="0" step="100"></label>
+        <label class="field"><span>Min. ežero plotas (ha)</span><input id="epLakeHa" type="number" min="0" step="1"></label>
+      </div>
+      <button class="btn full" id="btnSaveProfile">Išsaugoti profilį</button>
+
+      <hr class="sep">
+      <label class="field"><span>Testas — įklijuok skelbimo tekstą</span><textarea id="epTest" rows="5"></textarea></label>
+      <button class="btn btn-ghost full" id="btnTestProfile">Paleisti testą</button>
+      <div id="epTestOut"></div>
+    </div>
+  </div>
+
+  <div class="drawer-foot">
+    <button class="btn btn-danger" id="btnDelete">Ištrinti</button>
+    <div class="foot-right">
+      <button class="btn btn-ghost" id="btnArchive">Archyvuoti</button>
+      <button class="btn" id="btnSave">Išsaugoti</button>
+    </div>
+  </div>
+</aside>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

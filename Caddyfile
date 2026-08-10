@@ -1,0 +1,12 @@
+# Replace with your hostname. Caddy provisions TLS automatically once the DNS
+# A record points at this box.
+sodyba.example.com {
+    # Single-user tool holding an acquisition thesis and a live mail password.
+    # Do not remove this block.
+    # Generate a hash with:  docker run --rm caddy:2-alpine caddy hash-password
+    basic_auth {
+        gedi $2a$14$REPLACE_WITH_YOUR_BCRYPT_HASH
+    }
+    encode gzip
+    reverse_proxy radar:8000
+}
