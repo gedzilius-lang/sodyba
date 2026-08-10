@@ -231,3 +231,34 @@ def test_two_near_misses_merge_into_one_near_row():
     assert len(rows) == 1
     assert rows[0]["match_state"] == "near"
     assert rows[0]["price_eur"] == 24000
+
+
+def test_a_live_listing_is_not_absorbed_into_an_archived_candidate():
+    """Archiving is the user rejecting a listing. If the same property then
+    arrives from another portal and merges into the archived row, the property
+    is invisible in every default view — rejecting one portal's version of it
+    would permanently delete the property."""
+    init_db()
+    first = {"source": "rinka", "url": "https://www.rinka.lt/skelbimas/arch-1",
+             "municipality": "Anykščių rajono", "locality": "Debeikių k.",
+             "price_eur": 15000, "house_m2": 72, "plot_ares": 33,
+             "title": "Sodyba su tvenkiniu ir rūsiu", "cadastral_no": None}
+    ref1 = _insert(first, ["p1"], _fingerprint(first), "match", {})
+    assert ref1 is not None
+    with connect() as cx:
+        cx.execute("UPDATE candidate SET archived=1 WHERE url=?", (first["url"],))
+
+    second = {"source": "aruodas", "url": "https://www.aruodas.lt/skelbimas/arch-2",
+              "municipality": "Anykščių rajono", "locality": "Debeikių k.",
+              "price_eur": 15200, "house_m2": 72, "plot_ares": 33,
+              "title": "Sodyba su tvenkiniu ir rūsiu", "cadastral_no": None}
+    ref2 = _insert(second, ["p1"], _fingerprint(second), "match", {})
+    assert ref2 is not None, "an archived twin must not swallow a live listing"
+
+    with connect() as cx:
+        rows = cx.execute(
+            "SELECT url,archived FROM candidate WHERE url IN (?,?) ORDER BY url",
+            (first["url"], second["url"])).fetchall()
+    assert len(rows) == 2, "the live listing needs a row of its own"
+    live = [r for r in rows if r["url"] == second["url"]]
+    assert live and live[0]["archived"] == 0

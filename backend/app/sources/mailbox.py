@@ -151,7 +151,13 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
         siblings = [dict(r) for r in cx.execute(
             "SELECT id,ref,cadastral_no,municipality,locality,price_eur,house_m2,plot_ares,"
             "title,match_state,costs_json,profiles_json "
-            "FROM candidate WHERE municipality IS ? OR cadastral_no IS NOT NULL",
+            # An archived row is a rejected row. Merging a live listing into one
+            # makes the property unreachable in every default view: rejecting
+            # one portal's version of a sodyba must not delete the property.
+            # The parentheses are load-bearing — AND binds tighter than OR, so
+            # without them archived rows still arrive via the municipality arm.
+            "FROM candidate WHERE (municipality IS ? OR cadastral_no IS NOT NULL) "
+            "AND archived = 0",
             (listing.get("municipality"),)).fetchall()]
         twin = find_duplicate(listing, siblings)
         if twin:
