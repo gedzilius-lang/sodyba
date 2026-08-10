@@ -51,6 +51,8 @@ def _row_to_candidate(r) -> dict[str, Any]:
         "profiles": json.loads(r["profiles_json"] or "[]"),
         "easting": r["easting"], "northing": r["northing"],
         "nature": json.loads(r["nature_json"] or "{}"),
+        "match_state": r["match_state"],
+        "misses": json.loads(r["misses_json"] or "{}"),
         "flags": json.loads(r["flags_json"]), "scores": json.loads(r["scores_json"]),
         "costs": json.loads(r["costs_json"]), "checks": json.loads(r["checks_json"]),
     }
@@ -154,6 +156,7 @@ def list_candidates(
     min_score: Optional[float] = None,
     max_total_cost: Optional[float] = None,
     source: Optional[str] = None,
+    match_state: str = "match",
     profile: Optional[str] = None,
     near: Optional[str] = None,
     radius_km: Optional[float] = None,
@@ -171,6 +174,8 @@ def list_candidates(
         sql += " AND municipality=?"; args.append(municipality)
     if source:
         sql += " AND source=?"; args.append(source)
+    if match_state != "all":
+        sql += " AND match_state=?"; args.append(match_state)
     if min_price is not None:
         sql += " AND price_eur >= ?"; args.append(min_price)
     if max_price is not None:

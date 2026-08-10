@@ -24,7 +24,6 @@ from typing import Any
 from ..config import (IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASSWORD,
                       IMAP_FOLDER, IMAP_MAX_PER_RUN, IMAP_MARK_SEEN)
 from ..db import connect, log_refresh
-from ..filters import match_all
 from . import parsers
 
 log = logging.getLogger(__name__)
@@ -86,19 +85,21 @@ def _next_ref(cx) -> str:
     return f"K{n + 1:03d}"
 
 
-# Column list and parameter tuple must stay in lockstep — 18 bound parameters
-# against 18 `?` placeholders, with flags/scores/checks defaulted inline and
+# Column list and parameter tuple must stay in lockstep — 20 bound parameters
+# against 20 `?` placeholders, with flags/scores/checks defaulted inline and
 # `archived` fixed at 0. Count both sides if you touch this.
 _INSERT_SQL = (
     "INSERT INTO candidate("
     "ref,source,url,title,municipality,locality,cadastral_no,price_eur,house_m2,"
     "plot_ares,auction_ends_at,flags_json,scores_json,costs_json,checks_json,"
-    "notes,fingerprint,profiles_json,easting,northing,nature_json,archived) "
-    "VALUES(?,?,?,?,?,?,?,?,?,?,?,'{}','{}',?,'{}',?,?,?,?,?,?,0)"
+    "notes,fingerprint,profiles_json,easting,northing,nature_json,"
+    "match_state,misses_json,archived) "
+    "VALUES(?,?,?,?,?,?,?,?,?,?,?,'{}','{}',?,'{}',?,?,?,?,?,?,?,?,0)"
 )
 
 
-def _insert(listing: dict[str, Any], hits: list[str], fp: str) -> str | None:
+def _insert(listing: dict[str, Any], hits: list[str], fp: str,
+            state: str = "match", misses: dict[str, Any] | None = None) -> str | None:
     from ..api import settings
     costs = dict(settings()["auto_costs"])
     if listing.get("price_eur"):
@@ -127,6 +128,8 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str) -> str | None:
             nature.get("easting"),
             nature.get("northing"),
             json.dumps(nature, ensure_ascii=False),
+            state,
+            json.dumps(misses or {}, ensure_ascii=False),
         ))
     return ref
 
@@ -171,12 +174,19 @@ async def poll_mailbox() -> dict[str, Any]:
                 # distance to water rather than on whatever the advert claims.
                 from ..advisor import assess_nature  # local import: avoids a cycle
                 listing["nature"] = assess_nature(listing)
-                hits = match_all(listing, profiles)
-                if not hits:
+                from ..filters import evaluate_all, MATCH, NEAR
+                results = evaluate_all(listing, profiles)
+                hits = [r.key for r in results if r.state == MATCH]
+                nears = [r for r in results if r.state == NEAR]
+                if not hits and not nears:
                     rejected += 1
                     continue
-                ref = _insert(listing, hits, _fingerprint(listing))
-                if ref:
+                state = "match" if hits else "near"
+                misses = {r.key: [vars(m) for m in r.misses]
+                          for r in results if r.state in (MATCH, NEAR)}
+                ref = _insert(listing, hits or [r.key for r in nears],
+                              _fingerprint(listing), state, misses)
+                if ref and hits:
                     created.append({"ref": ref, "profiles": hits, **{
                         k: listing.get(k) for k in
                         ("title", "municipality", "locality", "price_eur",

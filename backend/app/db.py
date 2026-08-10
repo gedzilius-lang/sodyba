@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS candidate (
     northing          REAL,
     nature_json       TEXT NOT NULL DEFAULT '{}',
     profiles_json     TEXT NOT NULL DEFAULT '[]',
+    match_state       TEXT NOT NULL DEFAULT 'match',
+    misses_json       TEXT NOT NULL DEFAULT '{}',
     archived          INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
@@ -92,6 +94,14 @@ CREATE TABLE IF NOT EXISTS protected_area (
     min_e   REAL, min_n REAL, max_e REAL, max_n REAL
 );
 
+CREATE TABLE IF NOT EXISTS source_cursor (
+    source    TEXT PRIMARY KEY,
+    last_id   TEXT,
+    etag      TEXT,
+    modified  TEXT,
+    polled_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS refresh_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     source     TEXT NOT NULL,
@@ -112,6 +122,10 @@ MIGRATIONS = [
      "ALTER TABLE candidate ADD COLUMN nature_json TEXT NOT NULL DEFAULT '{}'"),
     ("candidate", "profiles_json",
      "ALTER TABLE candidate ADD COLUMN profiles_json TEXT NOT NULL DEFAULT '[]'"),
+    ("candidate", "match_state",
+     "ALTER TABLE candidate ADD COLUMN match_state TEXT NOT NULL DEFAULT 'match'"),
+    ("candidate", "misses_json",
+     "ALTER TABLE candidate ADD COLUMN misses_json TEXT NOT NULL DEFAULT '{}'"),
 ]
 
 
