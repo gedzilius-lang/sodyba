@@ -66,28 +66,39 @@ def _with(lake=None, river=None):
     return {**GOOD, "nature": {"nearest_lake": lake, "nearest_river": river}}
 
 
-def test_missing_river_misses_even_when_lake_is_close():
-    # v1 semantics: no river data rejects regardless of the lake
+def test_missing_river_is_forgiven_when_the_lake_qualifies():
+    # OR intent: the too-far branch already forgave a distant river when
+    # the lake qualified; missing river data is now treated the same way.
     r = f.evaluate(_with(lake={"distance_m": 100, "size": 9}), NATURE)
-    assert [m.field for m in r.misses] == ["max_river_m"]
+    assert r.misses == []
+    assert r.state == f.MATCH
+
+
+def test_missing_river_still_misses_when_the_lake_does_not_qualify():
+    r = f.evaluate(_with(lake={"distance_m": 5000, "size": 9}), NATURE)
+    assert {m.field for m in r.misses} == {"max_lake_m", "max_river_m"}
+    assert r.state == f.REJECT
 
 
 def test_river_too_far_is_forgiven_when_lake_is_within_range():
     r = f.evaluate(_with(lake={"distance_m": 100, "size": 9},
                          river={"distance_m": 9000}), NATURE)
     assert r.misses == []
+    assert r.state == f.MATCH
 
 
 def test_river_too_far_misses_when_lake_is_also_too_far():
     r = f.evaluate(_with(lake={"distance_m": 5000, "size": 9},
                          river={"distance_m": 9000}), NATURE)
     assert {m.field for m in r.misses} == {"max_lake_m", "max_river_m"}
+    assert r.state == f.REJECT
 
 
 def test_lake_below_minimum_size_misses():
     r = f.evaluate(_with(lake={"distance_m": 100, "size": 2},
                          river={"distance_m": 100}), NATURE)
     assert [m.field for m in r.misses] == ["min_lake_ha"]
+    assert r.state == f.REJECT
 
 
 def test_radius_profile_hard_misses_when_the_place_cannot_be_located():

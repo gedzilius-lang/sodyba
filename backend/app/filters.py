@@ -395,7 +395,8 @@ def _nature_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Mis
     if mr:
         lake_ok = bool(ml and lake and lake["distance_m"] <= ml)
         if not river:
-            out.append(Miss("max_river_m", SOFT, "upės nerasta"))
+            if not lake_ok:
+                out.append(Miss("max_river_m", SOFT, "upės nerasta"))
         elif river["distance_m"] > mr and not lake_ok:
             out.append(Miss("max_river_m", SOFT,
                             f"upė {river['distance_m']/1000:.1f} km > {mr/1000:.1f} km",
