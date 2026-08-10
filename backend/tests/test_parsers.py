@@ -132,3 +132,37 @@ def test_a_bare_cadastral_without_any_label_is_still_found():
 
 def test_unique_number_form_is_still_found():
     assert parsers.cadastral_no("Unikalus Nr. 4400-0123-0045") == "4400-0123-0045"
+
+
+def test_a_contacts_footer_does_not_suppress_a_bare_cadastral_number():
+    # "kontaktai" contains the old "akt" stem; it appears in nearly every
+    # portal email footer, while a genuine "Akto Nr." reference is rare
+    text = ("Dėl papildomos informacijos kontaktai žemiau.\n"
+            "4152/0007:96 yra sklypo numeris.\n")
+    assert parsers.cadastral_no(text) == "4152/0007:96"
+
+
+def test_a_genuine_akto_reference_is_still_rejected():
+    assert parsers.cadastral_no("Akto Nr. 1234-2026:01") is None
+
+
+def test_construction_work_in_progress_does_not_suppress_a_bare_cadastral_number():
+    # "vykdomi" (works in progress) shares the old "vykdom" stem with
+    # "Vykdomoji byla" but is common renovation-listing language on its own
+    text = "Sklype šiuo metu vykdomi statybos darbai. 4152/0007:96 yra sklypo numeris."
+    assert parsers.cadastral_no(text) == "4152/0007:96"
+
+
+def test_a_price_agreement_note_does_not_suppress_a_bare_cadastral_number():
+    # "sutarta" (agreed) shares its root with "sutartis" (contract) via the
+    # common verb "sutarti" (to agree) -- a 5-letter "sutar" stem would catch
+    # this everyday listing phrase along with the rare contract reference
+    text = "Kaina sutarta preliminariai. 4152/0007:96 yra sklypo numeris."
+    assert parsers.cadastral_no(text) == "4152/0007:96"
+
+
+def test_a_seller_decision_note_does_not_suppress_a_bare_cadastral_number():
+    # "nutarė" (decided) shares its root with "nutartis" (ruling) via the
+    # common verb "nutarti" (to decide)
+    text = "Pardavėjas nutarė sumažinti kainą. 4152/0007:96 yra sklypo numeris."
+    assert parsers.cadastral_no(text) == "4152/0007:96"

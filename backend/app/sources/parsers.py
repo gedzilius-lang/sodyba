@@ -65,11 +65,27 @@ def _f(m: re.Match | None, idx: int = 1) -> float | None:
     return float(raw.replace(",", "."))
 
 
-# Stems, not whole words, so declined forms are covered by substring
-# containment: "byl" catches "byla"/"bylos"/"byloje"/"bylų", "sutar" catches
-# both "sutartis" and its dative "sutarčiai", "nutar" catches both "nutartis"
-# (ruling) and "nutarimas" (resolution).
-_CAD_CONTEXT_NOISE = ("byl", "vykdom", "akt", "sutar", "sąsk", "nutar")
+# Declined forms, not bare stems -- a short stem is a substring of unrelated,
+# far more common words, which suppresses a real cadastral number more often
+# than it catches a genuine case reference. "akt" alone matched inside
+# "kontaktai" (contacts), present in nearly every portal email footer, while
+# "Akto Nr." references are rare; "vykdom" alone matched inside "vykdomi"
+# ("works in progress" -- common in renovation listings) and was redundant
+# with "byla" anyway, since "Vykdomoji byla" always carries the noun "byla";
+# a 5-letter "sutar"/"nutar" stem matched inside "sutarta" (price agreed) and
+# "nutarė" (seller decided) -- both common listing phrases, since "sutartis"
+# (contract) / "nutartis" (ruling) share their root with the everyday verbs
+# "sutarti" (to agree) / "nutarti" (to decide). Spelling out the specific
+# nominative/genitive/instrumental/locative forms that actually precede
+# "Nr." keeps the common verbs out while still covering the case-reference
+# nouns in the grammatical cases Lithuanian legal documents actually use.
+_CAD_CONTEXT_NOISE = (
+    "byla", "bylos", "byloje", "bylą", "bylų",                    # case
+    "akto", "aktas", "akte", "aktu",                              # deed/act
+    "sutartis", "sutarties", "sutartimi", "sutartyje",            # contract
+    "sąskaita", "sąskaitos", "sąskaitoje",                        # invoice
+    "nutartis", "nutarties", "nutarimas", "nutarimo", "nutarimu", # ruling
+)
 
 
 def cadastral_no(text: str) -> str | None:
