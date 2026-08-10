@@ -16,6 +16,41 @@ from dataclasses import dataclass, field as dc_field
 HARD, SOFT = "hard", "soft"
 MATCH, NEAR, REJECT = "match", "near", "reject"
 
+# How far outside a bound a listing may sit and still be shown as "Beveik".
+# Fractions of the bound itself, except require_any/municipality which are
+# categorical and always within tolerance when soft.
+# These are first guesses. The near-miss log is what corrects them.
+TOLERANCE: dict[str, float] = {
+    "price": 0.25,
+    "plot_ares": 0.30,
+    "house_m2": 0.25,
+    "max_lake_m": 0.50,
+    "max_river_m": 0.50,
+    "min_lake_ha": 0.40,
+    "radius_km": 0.30,
+}
+
+_CATEGORICAL = {"require_any", "municipality"}
+
+
+def _bound_for(fieldname: str, profile: dict[str, Any],
+               listing: dict[str, Any]) -> float | None:
+    """The profile bound a delta should be measured against."""
+    if fieldname == "price":
+        price, hi, lo = (listing.get("price_eur"), profile.get("max_price"),
+                         profile.get("min_price"))
+        if price is not None and hi is not None and price > hi:
+            return float(hi)
+        return float(lo) if lo else None
+    return {
+        "plot_ares": profile.get("min_plot_ares"),
+        "house_m2": profile.get("min_house_m2"),
+        "max_lake_m": profile.get("max_lake_m"),
+        "max_river_m": profile.get("max_river_m"),
+        "min_lake_ha": profile.get("min_lake_ha"),
+        "radius_km": profile.get("radius_km"),
+    }.get(fieldname)
+
 
 @dataclass
 class Miss:
@@ -213,12 +248,26 @@ def evaluate(listing: dict[str, Any], profile: dict[str, Any]) -> ProfileMatch:
     misses.extend(_radius_misses(listing, profile))
     misses.extend(_nature_misses(listing, profile))
 
-    return ProfileMatch(key, _state(misses), misses)
+    return ProfileMatch(key, _state(misses, profile, listing), misses)
 
 
-def _state(misses: list[Miss]) -> str:
-    """MATCH when clean, REJECT otherwise. Task 6 introduces NEAR here."""
-    return MATCH if not misses else REJECT
+def _state(misses: list[Miss], profile: dict[str, Any],
+           listing: dict[str, Any]) -> str:
+    """MATCH when clean, NEAR when every miss is soft and within tolerance."""
+    if not misses:
+        return MATCH
+    if any(m.kind == HARD for m in misses):
+        return REJECT
+    for m in misses:
+        if m.field in _CATEGORICAL:
+            continue
+        tol = TOLERANCE.get(m.field)
+        bound = _bound_for(m.field, profile, listing)
+        if tol is None or bound is None or m.delta is None:
+            return REJECT
+        if m.delta > bound * tol:
+            return REJECT
+    return NEAR
 
 
 def normalise_groups(raw: Any) -> list[dict[str, Any]]:

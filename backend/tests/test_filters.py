@@ -202,3 +202,32 @@ def test_sanitise_rejects_unusable_require_any():
 
 def test_sanitise_accepts_an_absent_require_any():
     assert f.sanitise({"name": "X"})["require_any"] == []
+
+
+def test_slightly_over_price_is_near_not_rejected():
+    r = f.evaluate({**GOOD, "price_eur": 21000}, PROFILE)   # ceiling 20000, +5%
+    assert r.state == f.NEAR
+
+
+def test_far_over_price_is_rejected():
+    r = f.evaluate({**GOOD, "price_eur": 45000}, PROFILE)
+    assert r.state == f.REJECT
+
+
+def test_hard_miss_is_never_near():
+    r = f.evaluate({**GOOD, "price_eur": 21000, "title": "dalis sodybos"}, PROFILE)
+    assert r.state == f.REJECT
+
+
+def test_slightly_small_plot_is_near():
+    r = f.evaluate({**GOOD, "plot_ares": 24}, PROFILE)      # needs 30, -20%
+    assert r.state == f.NEAR
+
+
+def test_partial_keyword_group_is_near():
+    r = f.evaluate({**GOOD, "title": "Sodyba miško apsuptyje"}, GROUPED)
+    assert r.state == f.NEAR
+
+
+def test_match_all_still_excludes_near_misses():
+    assert f.match_all({**GOOD, "price_eur": 21000}, [PROFILE]) == []
