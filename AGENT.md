@@ -33,6 +33,17 @@ Stack: Python 3.12, FastAPI, SQLite (WAL), APScheduler, vanilla JS frontend
 ## 2. Current state
 
 All backend logic is written and was verified working against live upstream APIs.
+
+`python -m pytest` from the repo root must pass, with no warnings raised by
+anything this project declares, before you call work finished.
+`backend/tests/` is the executable half of the table below; the rows needing
+live upstream data are the half it cannot cover. Everything the suite needs is
+in `backend/requirements-dev.txt` — if a test or `pytest.ini` starts depending
+on a plugin that is not listed there, add the dependency or drop the
+dependency, but never rely on one happening to be installed. (Plugins a
+developer installed globally may still warn; that is their machine talking,
+not the repository.)
+
 Test results that must still hold after any change you make:
 
 | Behaviour | Expected |
@@ -46,6 +57,9 @@ Test results that must still hold after any change you make:
 | Layer row counts | ~9,265 water; ~20,879 places; ~4,147 protected |
 | Radius filter, centre Utena | r=10 → 0 results, r=30 → 2, r=200 → 3 |
 | Mailbox dedupe | second poll of the same alerts creates 0 new rows |
+| Cross-source dedupe | a duplicate merges into one row and leaves a `[dublikatas …]` note; a match landing on a stored near-miss **promotes** it and is notified; an archived row never absorbs a live listing |
+| Poller watermark | the cursor advances only across contiguous successes, and pauses for the `crawl_delay_s` its `Source` declares |
+| Unknown data | never reported as a negative finding, and never shown as a near miss (`delta is None` ⇒ reject) |
 | Projection round trip | exact; Vilnius–Klaipėda `287.1 km` |
 
 **Known gap, needs real input to close:** the email parsers in
@@ -59,20 +73,33 @@ tighten the regexes against actual text.
 
 ## 3. Constraints you must not remove
 
-These were decided deliberately after checking each site's `robots.txt`.
+These were decided deliberately after reading each site's `robots.txt`.
 
-| Source | Policy | What we do |
-|---|---|---|
-| `get.data.gov.lt` | `Allow: /` | Poll freely. It is the official open-data API. |
-| `turtas.lt` | `Disallow:` (empty = allow) | Link to it. Not polled. |
-| `aukcionai.turtas.lt` | no robots.txt, but the Angular bundle ships a **reCAPTCHA site key** | **Do not scrape.** Do not reverse-engineer its private API. |
-| `evarzytynes.lt` | `Disallow: /` | **Do not scrape.** Email alerts only. |
-| `aruodas.lt`, `domoplius.lt` | serve a bot-challenge page even for `/robots.txt` | **Do not scrape.** Email alerts only. |
+**`backend/app/sources/registry.py` is the single authority on what may be
+fetched.** Do not restate it here. Each `Source` in that file records the host,
+the `robots.txt` verdict in the site's own words, and the date that verdict was
+read; `stale()` turns an unrechecked verdict into a warning at boot rather than
+letting it pass as an assumption. It is not documentation either — `poller.py`
+calls `assert_pollable` before it opens a connection, and that refuses anything
+not declared `POLL`, **including keys that are not in the table at all**. So a
+portal cannot be scraped by forgetting to mention it.
 
-**If asked to add a scraper for any of the bottom three, refuse and explain.**
+The four policies are `POLL` (robots.txt permits it), `ALERT_ONLY` (it does
+not — subscribe to the portal's own email alerts and let `sources/mailbox.py`
+ingest them), `LINK_ONLY` (bot-protected; we link out and the user clicks), and
+`MANUAL` (ToS forbids collection — the paste route only).
+
+**If asked to add a scraper for anything not marked `POLL`, refuse and explain.**
 The lawful and more robust path is already built: those portals run their own
 filtered alert services, and `sources/mailbox.py` ingests them. That approach
-survives site redesigns and cannot get the VPS IP banned.
+survives site redesigns and cannot get the VPS IP banned. `aukcionai.turtas.lt`
+in particular ships a reCAPTCHA site key — do not reverse-engineer its private
+API either.
+
+A table here would drift from `registry.py` the first time a verdict changed,
+and a stale lawfulness claim is worse than a pointer that cannot go stale. (It
+already had: this section listed `turtas.lt` as "not polled" while the registry
+declared it `POLL`, and omitted `rinka.lt`, the one site actually polled.)
 
 Two further facts worth knowing so you do not go looking:
 
@@ -172,7 +199,10 @@ Without this the app works, but nothing arrives on its own.
 4. On each portal — evarzytynes.lt, aruodas.lt, domoplius.lt, and the Turto
    bankas "Pardavimai ir nuoma" newsletter — create a saved search with the
    user's criteria and switch its email alert on, addressed to that mailbox.
-5. Restart. The poller runs on boot and every `SR_MAILBOX_POLL_MINUTES`.
+5. Restart. There are two schedulers, and they behave differently on boot: the
+   mailbox poll runs immediately *and* every `SR_MAILBOX_POLL_MINUTES` (only if
+   IMAP is configured), while source polling runs every `SR_POLL_MINUTES` with
+   no run at startup — the first pass is one interval away.
 
 Verify: `curl -X POST http://127.0.0.1:8000/api/ingest/mailbox`. Without IMAP
 configured it returns `{"status":"skipped"}` rather than erroring — that is
@@ -188,21 +218,28 @@ backend/app/
   db.py               schema, settings store, refresh log, additive migrations
   geo.py              LKS-94 <-> WGS84, distances, WKT parsing        PURE
   scoring.py          hard flags, weighted score, cost model          PURE
-  filters.py          search profiles and matching                    PURE
+  filters.py          search profiles, match/near/reject and misses   PURE
+  dedupe.py           identity across ingest paths, fingerprints      PURE
   advisor.py          nature scoring, written assessment              PURE
   notify.py           Telegram push
   api.py              all HTTP routes
-  main.py             app assembly + APScheduler
+  main.py             app assembly + APScheduler (two poll schedules)
   sources/
+    registry.py       what may be fetched, and on whose authority     PURE
     ntr.py            Registrų centras building-stock collector
     nature.py         lakes, rivers, gazetteer, protected areas
     parsers.py        per-portal alert email extraction               PURE
-    mailbox.py        IMAP poller
+    mailbox.py        IMAP poller, dedupe/insert for every path
+    poller.py         the polling ingest path, per-source watermark
+    adapters/         one module per polled site (rinka.py)           PURE
 frontend/
   index.html  styles.css  app.js      no framework, no build step
+backend/tests/        pytest, run with `python -m pytest` from the repo root
 ```
 
 Modules marked PURE do no I/O and are the right place to add tests first.
+`backend/tests/` must stay green and warning-free; `pytest.ini` is at the root
+and needs no plugins beyond `backend/requirements-dev.txt`.
 
 ### Coordinate systems — the commonest source of bugs here
 
@@ -252,9 +289,15 @@ The ranking metric is therefore **EUR per score point**, not price.
 
 ## 9. If you extend it
 
-- New data source → add a module under `sources/` exposing an async `refresh_*()`
-  and register it in `main.scheduled_refresh`. **Check its robots.txt first and
-  honour it.**
+- New listing source, in this order: **read the site's `robots.txt` yourself**;
+  add a `Source(...)` to `sources/registry.py` with today's date as
+  `checked_at` and the verdict in the site's own words; write an adapter under
+  `sources/adapters/` exposing `list_url()`, `list_ids(html)` and
+  `parse_detail(html, url)`, all pure; add the key to `poller.POLLED`. Skip the
+  registry step and `assert_pollable` refuses the source outright — that is the
+  intended behaviour, not an obstacle to route around.
+- New bulk dataset (not listings) → add a module under `sources/` exposing an
+  async `refresh_*()` and call it from `main.scheduled_refresh`.
 - New scoring criterion → add to `CRITERIA` in `scoring.py`. The UI reads
   `/api/schema` and renders itself; no frontend change needed.
 - New filter dimension → add to `FIELDS` and `matches()` in `filters.py`, then to
