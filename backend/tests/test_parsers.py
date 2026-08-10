@@ -26,5 +26,9 @@ def test_decimal_comma_tail_with_thousands_separator():
     assert _price("12 500,50 €") == 12500.0
 
 
+def test_non_breaking_space_thousands_separator():
+    assert _price("17" + chr(0xa0) + "000 EUR") == 17000.0
+
+
 def test_no_price_returns_none():
     assert _price("Sodyba prie ežero") is None
