@@ -85,15 +85,43 @@ async def poll_source(key: str, fetch: Fetch | None = None,
             log_refresh(key, "error", f"sąrašo puslapis grąžino {status}", 0, started)
             return {"status": "error", "http_status": status}
 
-        fresh = [(i, u) for i, u in adapter.list_ids(html) if i > since][:limit]
+        # ids arrive newest-first. Process the OLDEST new ones first so the
+        # cursor advances contiguously: a batch bigger than `limit` is then
+        # caught up over successive runs instead of having its tail skipped.
+        fresh = sorted(i_u for i_u in adapter.list_ids(html) if i_u[0] > since)[:limit]
+
+        # stalled_at marks the first id in this run that could not be fully
+        # ingested (fetch failure or unparseable page). The cursor may only
+        # advance across the unbroken run of successes *before* that id —
+        # once something stalls, every id at or after it must be retried on
+        # the next run, or a higher-id sibling processed later in the same
+        # batch would silently carry the watermark past a listing that was
+        # never actually ingested, losing it forever.
+        #
+        # Known limitation, not solved here: a listing that fails
+        # *permanently* (e.g. deleted between the category page and the
+        # detail fetch, so it 404s every run) stalls the cursor at that id
+        # indefinitely, and everything above it is refetched on every run.
+        # Ingestion still works — _insert's fingerprint check makes the
+        # repeats a no-op — but the run does needless work. Fixing this
+        # needs per-id failure counts (give up after N consecutive stalls),
+        # which is out of scope for this task.
+        stalled_at = None
         for listing_id, url in fresh:
             await asyncio.sleep(source.crawl_delay_s)
             st, page = await fetch(url)
             if st != 200:
+                if stalled_at is None:
+                    stalled_at = listing_id
                 continue
             scanned += 1
             listing = adapter.parse_detail(page, url)
             if listing.get("price_eur") is None and listing.get("house_m2") is None:
+                # Not actually a listing (parse failure, redirect, teaser
+                # page) — a failure to ingest just like a bad HTTP status,
+                # so it must not let the cursor pass it either.
+                if stalled_at is None:
+                    stalled_at = listing_id
                 continue
 
             from ..advisor import assess_nature       # local import: avoids a cycle
@@ -106,7 +134,8 @@ async def poll_source(key: str, fetch: Fetch | None = None,
             nears = [r.key for r in results if r.state == NEAR]
             if not hits and not nears:
                 rejected += 1
-                high = max(high, listing_id)
+                if stalled_at is None:
+                    high = listing_id
                 continue
             misses = {r.key: [vars(m) for m in r.misses]
                       for r in results if r.state in (MATCH, NEAR)}
@@ -117,7 +146,8 @@ async def poll_source(key: str, fetch: Fetch | None = None,
                     k: listing.get(k) for k in
                     ("title", "municipality", "locality", "price_eur",
                      "house_m2", "plot_ares", "url", "source")}})
-            high = max(high, listing_id)
+            if stalled_at is None:
+                high = listing_id
 
         if high > since:
             _save_cursor(key, high)
@@ -129,6 +159,8 @@ async def poll_source(key: str, fetch: Fetch | None = None,
         return {"status": "error", "error": str(exc)}
 
     detail = f"{len(created)} nauji; peržiūrėta {scanned}; atmesta {rejected}"
+    if stalled_at is not None:
+        detail += f"; kursorius sustabdytas ties {stalled_at} — bus bandoma dar kartą"
     log_refresh(key, "ok", detail, len(created), started)
     log.info("%s: %s", key, detail)
     return {"status": "ok", "created": created,
