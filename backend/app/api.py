@@ -1,7 +1,6 @@
 """HTTP API. All state changes go through here; the frontend holds nothing."""
 from __future__ import annotations
 import json
-import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -307,13 +306,6 @@ class PasteIn(BaseModel):
     url: Optional[str] = None
 
 
-PRICE_RE = re.compile(r"(\d[\d\s.]{2,12})\s*(?:EUR|€|Eur)", re.I)
-AREA_RE = re.compile(r"(\d+[.,]?\d*)\s*(?:kv\.?\s*m|m2|m²)", re.I)
-PLOT_RE = re.compile(r"(\d+[.,]?\d*)\s*(?:a\b|ar[ųu]|arai)", re.I)
-MUNI_RE = re.compile(r"([A-ZČĖĘĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*r(?:\.|ajono)", re.U)
-CAD_RE = re.compile(r"\b(\d{4}[/-]\d{4}[/-]\d{3,4}[:\-]?\d*)\b")
-
-
 @router.post("/paste", status_code=201)
 def paste(body: PasteIn) -> dict[str, Any]:
     """Ingest a listing pasted from a portal we may not crawl.
@@ -321,29 +313,28 @@ def paste(body: PasteIn) -> dict[str, Any]:
     evarzytynes.lt (Disallow: /) and the classifieds actively block bots, so the
     lawful path is: subscribe to their own email alerts, paste the text here.
     Anything the parser misses you fix in the detail panel.
+
+    Numeric and location fields go through parsers.route() rather than a local
+    copy of its regexes, so a fix to the parser (e.g. decimal-tail prices,
+    NBSP thousands separators) applies here too instead of silently diverging.
     """
     t = body.text.strip()
     if not t:
         raise HTTPException(400, "empty text")
 
-    def _num(m, idx=1):
-        return float(m.group(idx).replace(" ", "").replace(".", "").replace(",", ".")) if m else None
-
-    price = _num(PRICE_RE.search(t))
-    area_m = AREA_RE.search(t)
-    plot_m = PLOT_RE.search(t)
-    muni_m = MUNI_RE.search(t)
-    cad_m = CAD_RE.search(t)
+    from .sources import parsers
+    parsed = parsers.route("", "", body.text)
 
     return create_candidate(CandidateIn(
         source=body.source,
         url=body.url,
         title=t.splitlines()[0][:200] if t.splitlines() else None,
-        municipality=f"{muni_m.group(1)} rajono" if muni_m else None,
-        cadastral_no=cad_m.group(1) if cad_m else None,
-        price_eur=price,
-        house_m2=float(area_m.group(1).replace(",", ".")) if area_m else None,
-        plot_ares=float(plot_m.group(1).replace(",", ".")) if plot_m else None,
+        municipality=parsed.get("municipality"),
+        locality=parsed.get("locality"),
+        cadastral_no=parsed.get("cadastral_no"),
+        price_eur=parsed.get("price_eur"),
+        house_m2=parsed.get("house_m2"),
+        plot_ares=parsed.get("plot_ares"),
         notes=t[:4000],
     ))
 
