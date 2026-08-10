@@ -63,6 +63,11 @@ IMAP_MAX_PER_RUN = int(os.getenv("SR_IMAP_MAX_PER_RUN", "40"))
 IMAP_MARK_SEEN = os.getenv("SR_IMAP_MARK_SEEN", "true").lower() == "true"
 MAILBOX_POLL_MINUTES = int(os.getenv("SR_MAILBOX_POLL_MINUTES", "15"))
 
+# ---------------------------------------------------------------- poller
+# Only sources declared POLL in sources/registry.py are ever fetched.
+POLL_MINUTES = int(os.getenv("SR_POLL_MINUTES", "60"))
+POLL_MAX_PER_RUN = int(os.getenv("SR_POLL_MAX_PER_RUN", "40"))
+
 # ---------------------------------------------------------------- notify
 TELEGRAM_TOKEN = os.getenv("SR_TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("SR_TELEGRAM_CHAT_ID", "")
