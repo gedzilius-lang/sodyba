@@ -12,7 +12,8 @@ from .db import connect, get_setting, set_setting
 from .scoring import CRITERIA, HARD_FLAGS, COST_LINES, DEFAULT_SETTINGS, evaluate
 from .filters import PRESETS, sanitise, match_all, matches
 from .sources import (refresh_market_stock, poll_mailbox, mailbox_configured,
-                      refresh_water, refresh_places, refresh_protected, geocode)
+                      refresh_water, refresh_places, refresh_protected, geocode,
+                      poll_all, POLLED, registry)
 from . import notify
 
 router = APIRouter(prefix="/api")
@@ -77,6 +78,12 @@ def schema() -> dict[str, Any]:
             "mailbox_configured": mailbox_configured(),
             "telegram_configured": notify.enabled(),
             "layers": _layer_status(),
+            "polled": POLLED,
+            "sources": [
+                {"key": s.key, "host": s.host, "policy": s.policy,
+                 "robots": s.robots, "checked_at": s.checked_at}
+                for s in registry.SOURCES
+            ],
         },
         "checks": [
             {"key": "ntr_extract", "label": "NTR išrašas", "url": "https://www.registrucentras.lt", "cost": "~5 EUR"},
@@ -507,6 +514,16 @@ async def ingest_mailbox() -> dict[str, Any]:
     result = await poll_mailbox()
     if result.get("created"):
         await notify.push(result["created"])
+    return result
+
+
+@router.post("/ingest/poll")
+async def ingest_poll() -> dict[str, Any]:
+    """Poll every permitted source now. Sources are gated by sources/registry.py."""
+    result = await poll_all()
+    created = [c for r in result.values() for c in (r.get("created") or [])]
+    if created:
+        await notify.push(created)
     return result
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import date
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -12,10 +13,11 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import router, WATCHLIST_KEY
 from .config import (DEFAULT_MUNICIPALITIES, FRONTEND_DIR, MAILBOX_POLL_MINUTES,
-                     REFRESH_CRON_HOUR, REFRESH_ON_BOOT)
+                     POLL_MINUTES, REFRESH_CRON_HOUR, REFRESH_ON_BOOT)
 from .db import get_setting, init_db
 from .sources import (refresh_market_stock, poll_mailbox, mailbox_configured,
-                      refresh_water, refresh_places, refresh_protected)
+                      refresh_water, refresh_places, refresh_protected,
+                      poll_all, registry)
 from . import notify
 
 logging.basicConfig(level=logging.INFO,
@@ -60,6 +62,18 @@ async def scheduled_mailbox() -> None:
         log.exception("mailbox poll failed")
 
 
+async def scheduled_poll() -> None:
+    """Poll the sources whose robots.txt permits it."""
+    try:
+        result = await poll_all()
+        created = [c for r in result.values() for c in (r.get("created") or [])]
+        if created:
+            await notify.push(created)
+            log.info("poller: %s new candidates", len(created))
+    except Exception:
+        log.exception("source poll failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -75,6 +89,18 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("IMAP not configured — automatic listing ingestion is OFF. "
                     "Set SR_IMAP_* to enable it.")
+
+    sched.add_job(scheduled_poll, IntervalTrigger(minutes=POLL_MINUTES),
+                  id="source_poll", max_instances=1, coalesce=True)
+    log.info("source polling every %s min: %s", POLL_MINUTES,
+             ", ".join(s.key for s in registry.SOURCES
+                       if s.policy == registry.POLL))
+
+    stale = registry.stale(date.today().isoformat())
+    if stale:
+        log.warning("robots.txt verdicts older than 90 days: %s — recheck before "
+                    "trusting the poller", ", ".join(stale))
+
     sched.start()
     log.info("scheduler started; NTR refresh daily at %02d:00 Europe/Vilnius",
              REFRESH_CRON_HOUR)
