@@ -95,4 +95,40 @@ def test_cadastral_does_not_match_a_landline_phone_number():
 
 def test_cadastral_does_not_match_an_auction_lot_reference():
     # Plausible evarzytynes.lt-style lot reference: not a cadastral number.
+    # NOTE: a 5+4 digit split like this cannot match CAD_RE at all, regardless
+    # of context (see test_parsers.py history / task-8b-report.md fix round 1)
+    # -- it does not exercise the same-shape case-number risk that
+    # test_labelled_cadastral_wins_over_an_earlier_case_number below covers.
     assert _cad("Turto vieneto Nr. 12345-6789") is None
+
+
+def test_labelled_cadastral_wins_over_an_earlier_case_number():
+    notice = ("Vykdomoji byla Nr. 0157/2024:12\n"
+              "Parduodamas nekilnojamasis turtas: sodyba, Utenos r.\n"
+              "Kadastro Nr. 4152/0007:96\n")
+    assert parsers.cadastral_no(notice) == "4152/0007:96"
+
+
+def test_a_bare_case_number_is_not_taken_as_a_cadastral_number():
+    assert parsers.cadastral_no("Vykdomoji byla Nr. 0157/2024:12") is None
+
+
+def test_lots_from_one_execution_case_do_not_share_a_cadastral_number():
+    # each lot must resolve to its OWN parcel, or dedupe's authoritative
+    # cadastral short-circuit would merge three unrelated properties
+    lots = [("sodyba Utenos r.", "4152/0007:96"),
+            ("namas Zarasu r.", "4330/0011:22"),
+            ("sklypas Moletu r.", "4990/0005:7")]
+    got = [parsers.cadastral_no(
+               f"Vykdomoji byla Nr. 0157/2024:12\nParduodama: {what}\n"
+               f"Kadastro Nr. {kad}\n15000 EUR") for what, kad in lots]
+    assert got == [kad for _, kad in lots]
+    assert len(set(got)) == 3
+
+
+def test_a_bare_cadastral_without_any_label_is_still_found():
+    assert parsers.cadastral_no("Sodyba, 4152/0007:96, 20 arų") == "4152/0007:96"
+
+
+def test_unique_number_form_is_still_found():
+    assert parsers.cadastral_no("Unikalus Nr. 4400-0123-0045") == "4400-0123-0045"

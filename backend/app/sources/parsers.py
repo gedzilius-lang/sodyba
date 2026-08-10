@@ -30,7 +30,15 @@ PLOT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:a\b|ar[ųu]|arai|aro)", re.I)
 HA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*ha\b", re.I)
 MUNI_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:r\.|rajon)", re.U)
 CITY_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:m\.\s*sav|miesto sav)", re.U)
-CAD_RE = re.compile(r"\b(\d{4}[/\-]\d{4}\s*[:\-/]\s*\d{1,4})\b")
+# A bailiff notice carries "Vykdomoji byla Nr. 0157/2024:12" before the real
+# "Kadastro Nr. 4152/0007:96", and both fit the bare shape. Leftmost-match
+# would take the case number -- and every lot in one execution case shares it,
+# so dedupe's authoritative cadastral short-circuit would merge unrelated
+# properties. Prefer an explicitly labelled number; fall back to the bare
+# shape only when no label is present, skipping case-reference context.
+_CAD_NUM = r"(\d{4}[/\-]\d{4}\s*[:\-/]\s*\d{1,4})"
+CAD_LABELLED_RE = re.compile(r"(?:kadastr\w*|unikal\w*)[^0-9]{0,24}" + _CAD_NUM, re.I | re.U)
+CAD_RE = re.compile(r"\b" + _CAD_NUM + r"\b")
 LOCALITY_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+(?:ių|ų|os|ai|iai|ė|as))\s*k\.", re.U)
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
@@ -57,6 +65,26 @@ def _f(m: re.Match | None, idx: int = 1) -> float | None:
     return float(raw.replace(",", "."))
 
 
+# Stems, not whole words, so declined forms are covered by substring
+# containment: "byl" catches "byla"/"bylos"/"byloje"/"bylų", "sutar" catches
+# both "sutartis" and its dative "sutarčiai", "nutar" catches both "nutartis"
+# (ruling) and "nutarimas" (resolution).
+_CAD_CONTEXT_NOISE = ("byl", "vykdom", "akt", "sutar", "sąsk", "nutar")
+
+
+def cadastral_no(text: str) -> str | None:
+    """Prefer an explicitly labelled cadastral number over a bare match."""
+    m = CAD_LABELLED_RE.search(text or "")
+    if m:
+        return m.group(1)
+    for m in CAD_RE.finditer(text or ""):
+        lead = (text[max(0, m.start() - 40):m.start()]).lower()
+        if any(w in lead for w in _CAD_CONTEXT_NOISE):
+            continue
+        return m.group(1)
+    return None
+
+
 def _common(text: str) -> dict[str, Any]:
     plot = _f(PLOT_RE.search(text))
     if plot is None:
@@ -70,7 +98,7 @@ def _common(text: str) -> dict[str, Any]:
         "plot_ares": plot,
         "municipality": f"{muni.group(1)} rajono" if muni else None,
         "locality": f"{loc.group(1)} k." if loc else None,
-        "cadastral_no": (lambda m: m.group(1) if m else None)(CAD_RE.search(text)),
+        "cadastral_no": cadastral_no(text),
     }
 
 
