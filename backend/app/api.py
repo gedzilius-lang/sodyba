@@ -295,7 +295,7 @@ def update_candidate(cid: int, body: CandidateIn) -> dict[str, Any]:
 
 
 @router.delete("/candidates/{cid}", status_code=204)
-def delete_candidate(cid: int) -> None:
+def delete_candidate(cid: int):
     with connect() as cx:
         cx.execute("DELETE FROM candidate WHERE id=?", (cid,))
 
