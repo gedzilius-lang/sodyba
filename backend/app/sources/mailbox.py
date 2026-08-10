@@ -98,7 +98,7 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
         if cx.execute("SELECT 1 FROM candidate WHERE fingerprint=?", (fp,)).fetchone():
             return None
         siblings = [dict(r) for r in cx.execute(
-            "SELECT id,ref,cadastral_no,municipality,price_eur,house_m2,plot_ares,title "
+            "SELECT id,ref,cadastral_no,municipality,locality,price_eur,house_m2,plot_ares,title "
             "FROM candidate WHERE municipality IS ? OR cadastral_no IS NOT NULL",
             (listing.get("municipality"),)).fetchall()]
         twin = find_duplicate(listing, siblings)

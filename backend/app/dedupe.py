@@ -27,13 +27,18 @@ TITLE_OVERLAP = 0.40  # Jaccard over words of 4+ characters, place words strippe
 _WORD_RE = re.compile(r"[0-9a-ząčęėįšųūž]{4,}", re.I)
 _STOP = {"parduodama", "parduodamas", "parduodu", "sodyba", "sodybą", "sodybos",
          "namas", "namą", "skelbimas", "rajone", "rajono",
-         "prie", "netoli", "šalia", "su", "apie"}
+         "prie", "netoli", "šalia", "apie"}
 
 # Lithuanian declines heavily: the same feature appears as "ežero" on one
 # portal and "ežeras" on another. Comparing whole words scores those at zero.
-# Four characters is the stem length filters.py already matches on
-# (WATER_WORDS = ["ežer", ...]), so the two modules agree about what a
-# keyword is.
+# Four characters is a pragmatic stem length, not a shared standard with
+# filters.py's WATER_WORDS/FOREST_WORDS (those mix lengths -- "ežer", "upė",
+# "pakrant", "tvenkin" -- and match by variable-length substring, not a fixed
+# stem). It is chosen here as the shortest prefix that survives the common
+# Lithuanian noun case endings for the property vocabulary this module deals
+# with. Measured trade-off: five characters would still catch pirtimi/pirtis,
+# tvenkiniu/tvenkinys and garažu/garažas, but breaks ežero/ežeras and
+# miško/miškas -- two of the module's own worked examples -- so four stays.
 STEM_LEN = 4
 
 
