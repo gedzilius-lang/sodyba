@@ -99,3 +99,45 @@ def test_radius_profile_hard_misses_when_the_place_cannot_be_located():
 def test_centres_without_a_radius_are_ignored():
     p = {**PROFILE, "centres": ["Utena"], "radius_km": None}
     assert f.evaluate(GOOD, p).misses == []
+
+
+GROUPED = {**PROFILE, "require_any": [
+    {"name": "miškas", "words": ["mišk", "giri"]},
+    {"name": "vanduo", "words": ["ežer", "upė"]},
+]}
+
+
+def test_all_groups_hit_is_a_match():
+    r = f.evaluate({**GOOD, "title": "Sodyba miške prie ežero"}, GROUPED)
+    assert r.state == f.MATCH
+
+
+def test_one_group_of_two_is_a_soft_miss():
+    r = f.evaluate({**GOOD, "title": "Sodyba miško apsuptyje"}, GROUPED)
+    m = next(x for x in r.misses if x.field == "require_any")
+    assert m.kind == f.SOFT
+    assert "vanduo" in m.text
+
+
+def test_no_group_hit_is_a_hard_miss():
+    r = f.evaluate({**GOOD, "title": "Mūrinis namas mieste"}, GROUPED)
+    m = next(x for x in r.misses if x.field == "require_any")
+    assert m.kind == f.HARD
+
+
+def test_flat_v1_list_still_behaves_as_v1():
+    flat = {**PROFILE, "require_any": ["mišk", "giri"]}
+    assert f.evaluate({**GOOD, "title": "Sodyba miške"}, flat).state == f.MATCH
+    r = f.evaluate({**GOOD, "title": "Namas mieste"}, flat)
+    assert next(x for x in r.misses if x.field == "require_any").kind == f.HARD
+
+
+def test_sanitise_upgrades_a_flat_list_to_one_group():
+    p = f.sanitise({"name": "X", "require_any": ["mišk", "giri"]})
+    assert p["require_any"] == [{"name": "raktažodžiai", "words": ["mišk", "giri"]}]
+
+
+def test_sanitise_preserves_groups():
+    p = f.sanitise({"name": "X", "require_any": [
+        {"name": "vanduo", "words": ["ežer"]}]})
+    assert p["require_any"] == [{"name": "vanduo", "words": ["ežer"]}]

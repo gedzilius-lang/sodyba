@@ -61,7 +61,7 @@ PRESETS: list[dict[str, Any]] = [
         "min_price": 3000, "max_price": 20000,
         "min_plot_ares": 30, "min_house_m2": 40,
         "municipalities": FOREST_BELT + ["Anykščių rajono", "Molėtų rajono"],
-        "require_any": FOREST_WORDS,
+        "require_any": [{"name": "miškas", "words": FOREST_WORDS}],
         "require_all": [],
         "exclude_any": JUNK_WORDS,
         "sources": [],
@@ -91,7 +91,7 @@ PRESETS: list[dict[str, Any]] = [
         "min_price": 3000, "max_price": 20000,
         "min_plot_ares": 15, "min_house_m2": 50,
         "municipalities": HIGH_UTILITY,
-        "require_any": UTILITY_WORDS,
+        "require_any": [{"name": "komunikacijos", "words": UTILITY_WORDS}],
         "require_all": [],
         "exclude_any": JUNK_WORDS,
         "sources": [],
@@ -217,13 +217,43 @@ def _state(misses: list[Miss]) -> str:
     return MATCH if not misses else REJECT
 
 
+def normalise_groups(raw: Any) -> list[dict[str, Any]]:
+    """Accept both shapes of require_any and return the canonical grouped one.
+
+    v1 stored a flat list of words. One flat list becomes one group, which under
+    the all-groups-must-hit rule behaves exactly as v1 did.
+    """
+    if not raw:
+        return []
+    if all(isinstance(x, str) for x in raw):
+        return [{"name": "raktažodžiai",
+                 "words": [str(x).strip() for x in raw if str(x).strip()]}]
+    out = []
+    for g in raw:
+        if isinstance(g, str):
+            out.append({"name": g, "words": [g]})
+            continue
+        words = [str(w).strip() for w in (g.get("words") or []) if str(w).strip()]
+        if words:
+            out.append({"name": str(g.get("name") or "raktažodžiai").strip(),
+                        "words": words})
+    return out
+
+
 def _keyword_misses(hay: str, profile: dict[str, Any]) -> list[Miss]:
-    words = profile.get("require_any") or []
-    if not words:
+    """Every group must be hit. Missing some is soft; missing all is hard."""
+    groups = normalise_groups(profile.get("require_any"))
+    if not groups:
         return []
-    if any(str(w).lower() in hay for w in words):
+    hit = [g for g in groups if any(w.lower() in hay for w in g["words"])]
+    missed = [g for g in groups if g not in hit]
+    if not missed:
         return []
-    return [Miss("require_any", HARD, "nerastas nė vienas raktažodis")]
+    names = ", ".join(g["name"] for g in missed)
+    if hit:
+        got = ", ".join(g["name"] for g in hit)
+        return [Miss("require_any", SOFT, f"{got} ✓ / {names} ✗")]
+    return [Miss("require_any", HARD, f"nerasta: {names}")]
 
 
 def _radius_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Miss]:
@@ -309,8 +339,10 @@ def sanitise(raw: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for f in FIELDS:
         v = raw.get(f)
-        if f in ("municipalities", "require_any", "require_all", "exclude_any",
-                 "sources", "centres"):
+        if f == "require_any":
+            out[f] = normalise_groups(v)
+        elif f in ("municipalities", "require_all", "exclude_any",
+                   "sources", "centres"):
             out[f] = [str(x).strip() for x in (v or []) if str(x).strip()]
         elif f == "enabled":
             out[f] = bool(v)
