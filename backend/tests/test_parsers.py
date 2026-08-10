@@ -1,3 +1,5 @@
+import pytest
+
 from backend.app.sources import parsers
 
 
@@ -166,3 +168,22 @@ def test_a_seller_decision_note_does_not_suppress_a_bare_cadastral_number():
     # common verb "nutarti" (to decide)
     text = "Pardavėjas nutarė sumažinti kainą. 4152/0007:96 yra sklypo numeris."
     assert parsers.cadastral_no(text) == "4152/0007:96"
+
+
+@pytest.mark.parametrize("text", [
+    "Dėl informacijos kontaktai žemiau. 4152/0007:96 yra sklypo numeris.",
+    "Parduodama sodyba su traktoriumi. 4152/0007:96, 20 arų.",
+    "Tai faktas. Sklypas 4152/0007:96.",
+    "Kontaktas: 8 600 12345. Sklypas 4152/0007:96.",
+])
+def test_words_merely_containing_a_noise_stem_do_not_suppress_a_cadastral(text):
+    assert parsers.cadastral_no(text) == "4152/0007:96"
+
+
+@pytest.mark.parametrize("text", [
+    "Vykdomoji byla Nr. 0157/2024:12",
+    "Akto Nr. 1234-2026:01",
+    "Sutarties Nr. 1234/5678:12",
+])
+def test_reference_numbers_are_still_rejected(text):
+    assert parsers.cadastral_no(text) is None

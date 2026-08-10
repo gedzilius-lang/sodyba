@@ -65,27 +65,38 @@ def _f(m: re.Match | None, idx: int = 1) -> float | None:
     return float(raw.replace(",", "."))
 
 
-# Declined forms, not bare stems -- a short stem is a substring of unrelated,
-# far more common words, which suppresses a real cadastral number more often
-# than it catches a genuine case reference. "akt" alone matched inside
-# "kontaktai" (contacts), present in nearly every portal email footer, while
-# "Akto Nr." references are rare; "vykdom" alone matched inside "vykdomi"
-# ("works in progress" -- common in renovation listings) and was redundant
-# with "byla" anyway, since "Vykdomoji byla" always carries the noun "byla";
-# a 5-letter "sutar"/"nutar" stem matched inside "sutarta" (price agreed) and
-# "nutarė" (seller decided) -- both common listing phrases, since "sutartis"
-# (contract) / "nutartis" (ruling) share their root with the everyday verbs
-# "sutarti" (to agree) / "nutarti" (to decide). Spelling out the specific
-# nominative/genitive/instrumental/locative forms that actually precede
-# "Nr." keeps the common verbs out while still covering the case-reference
-# nouns in the grammatical cases Lithuanian legal documents actually use.
-_CAD_CONTEXT_NOISE = (
-    "byla", "bylos", "byloje", "bylą", "bylų",                    # case
-    "akto", "aktas", "akte", "aktu",                              # deed/act
-    "sutartis", "sutarties", "sutartimi", "sutartyje",            # contract
-    "sąskaita", "sąskaitos", "sąskaitoje",                        # invoice
-    "nutartis", "nutarties", "nutarimas", "nutarimo", "nutarimu", # ruling
-)
+# Words that mark a reference number which is NOT a cadastral number:
+# bailiff case files, acts, contracts, invoices, rulings. Matched at a word
+# boundary (\b), not as a substring -- rounds 1-2 chased individual stems
+# hiding inside unrelated words one at a time ("akt" inside "kontaktai";
+# "vykdom" inside "vykdomi", works-in-progress; "sutar"/"nutar" inside
+# "sutarta"/"nutare", price-agreed/seller-decided) and that is the wrong
+# shape of fix -- any stem short enough to catch declensions is also short
+# enough to sit inside an unrelated word. \b anchors the match to a real
+# word start, so a short stem is safe there ("byl" no longer needs spelling
+# out) -- but \b alone does not help where the *unwanted* word itself starts
+# with the same letters as the wanted one: "vykdomi" starts with "vykdom"
+# exactly like "vykdomoji" does, and "sutarta"/"nutarta" start with
+# "sutart"/"nutart" exactly like "sutartis"/"nutartis" do. Those keep their
+# full literal forms; "vykdom" is dropped outright, since every real
+# "Vykdomoji byla" mention already carries the noun "byla" alongside it.
+# "aktu" (instrumental) is dropped too: it is a real prefix of "aktualu"
+# ("current/relevant" -- common listing language, e.g. "pasiūlymas
+# aktualus"), and genitive "Akto Nr." is the form that actually occurs
+# before a reference number, per the coordinator's own worked example.
+# Verified empirically against a purpose-built false-positive/false-negative
+# check (kontaktai/kontaktas/kontakte/kontaktu/kontakto, faktas/faktu,
+# traktoriaus/traktoriumi, vykdomi/vykdoma/vykdomas, sutarta/sutarimas,
+# nutarė/nutariau/nutarta, aktualu/aktualus/aktyvus -- none trigger; every
+# genuine declined form of byla/aktas/sutartis/sąskaita/nutartis/nutarimas
+# still does) before this pattern replaced the substring check.
+_CAD_CONTEXT_NOISE_RE = re.compile(
+    r"\b(?:byl\w*"                                                  # case
+    r"|akto\w*|aktas\w*|akte\w*"                                    # deed/act
+    r"|sutartis\w*|sutarties\w*|sutartimi\w*|sutartyje\w*"          # contract
+    r"|sąsk\w*"                                                     # invoice
+    r"|nutartis\w*|nutarties\w*|nutarimas\w*|nutarimo\w*|nutarimu\w*)",  # ruling
+    re.I | re.U)
 
 
 def cadastral_no(text: str) -> str | None:
@@ -94,8 +105,8 @@ def cadastral_no(text: str) -> str | None:
     if m:
         return m.group(1)
     for m in CAD_RE.finditer(text or ""):
-        lead = (text[max(0, m.start() - 40):m.start()]).lower()
-        if any(w in lead for w in _CAD_CONTEXT_NOISE):
+        lead = text[max(0, m.start() - 40):m.start()]
+        if _CAD_CONTEXT_NOISE_RE.search(lead):
             continue
         return m.group(1)
     return None
