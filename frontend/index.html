@@ -90,6 +90,15 @@
         </select>
       </label>
 
+      <label class="field">
+        <span>Atitikimas</span>
+        <select id="fMatchState">
+          <option value="match">Tik atitinkantys</option>
+          <option value="near">Tik „beveik“</option>
+          <option value="all">Visi</option>
+        </select>
+      </label>
+
       <div class="field-row">
         <label class="field">
           <span>Min. balas</span>
@@ -166,7 +175,7 @@
               <th>Nr.</th><th>Vietovė</th><th class="num">Kaina</th>
               <th class="core-col">Vertinimo pjūvis</th>
               <th class="num">Balas</th><th class="num">Visi kaštai</th>
-              <th>Gamta</th><th class="num">EUR/tšk.</th><th>Verdiktas</th>
+              <th>Gamta</th><th class="num">EUR/tšk.</th><th>Atitikimas</th><th>Verdiktas</th>
             </tr>
           </thead>
           <tbody id="candBody"></tbody>

@@ -22,6 +22,8 @@ const VERDICT_LT = {
   incomplete: 'Neįvertintas', rejected: 'Atmestas',
 };
 
+const MATCH_LT = { match: 'Atitinka', near: 'Beveik' };
+
 let SCHEMA = null;      // criteria, flags, cost lines, checks, municipalities
 let SETTINGS = null;    // weights, budget, min score, contingency
 let CURRENT = null;     // candidate open in the drawer, or null for a new one
@@ -91,6 +93,17 @@ function natureCell(c) {
   return `<div class="nat">${bits.join('<br>') || '—'}</div>`;
 }
 
+/* A merged-duplicate line looks like:
+   "[dublikatas rinka] · 17300 EUR · 81 m2 · 41 a · <title> · <url>"
+   appended to notes when dedupe folds a second-source listing into this row.
+   Surface it as a small chip — otherwise it is only visible by already
+   suspecting a merge and opening the row's notes. */
+function duplicateChip(notes) {
+  if (!notes || !notes.includes('[dublikatas')) return '';
+  const lines = notes.split('\n').filter((l) => l.includes('[dublikatas'));
+  return `<span class="chip chip-dup" title="${esc(lines.join('\n'))}">dublikatas</span>`;
+}
+
 /* ------------------------------------------------------------- candidates */
 function filterQuery() {
   const p = new URLSearchParams();
@@ -111,6 +124,7 @@ function filterQuery() {
   put('max_total_cost', $('fMaxCost').value);
   put('sort', $('fSort').value);
   if ($('fArchived').checked) p.set('include_archived', 'true');
+  put('match_state', $('fMatchState').value);
   return p.toString();
 }
 
@@ -124,6 +138,7 @@ async function loadCandidates() {
   data.items.forEach((c) => {
     const tr = document.createElement('tr');
     if (c.archived) tr.classList.add('is-archived');
+    if (c.match_state === 'near') tr.classList.add('is-near');
     tr.onclick = () => openDrawer(c);
 
     const td = (html, cls) => {
@@ -134,7 +149,7 @@ async function loadCandidates() {
     };
     tr.appendChild(td(`<span class="ref">${esc(c.ref)}</span>`));
     const chips = (c.profiles || [])
-      .map((k) => `<span class="chip">${esc(profileName(k))}</span>`).join('');
+      .map((k) => `<span class="chip">${esc(profileName(k))}</span>`).join('') + duplicateChip(c.notes);
     tr.appendChild(td(
       `<span class="place">${esc(c.locality || c.title || '—')}` +
       `<small>${esc(c.municipality || '')} · ${esc(c.source)}</small>${chips}</span>`));
@@ -144,6 +159,13 @@ async function loadCandidates() {
     tr.appendChild(td(fmt(c.total_cost), 'num'));
     tr.appendChild(td(natureCell(c)));
     tr.appendChild(td(fmt(c.eur_per_point), 'num'));
+    const misses = Object.values(c.misses || {}).flat();
+    const why = misses.map((m) => m.text).join(' · ');
+    tr.appendChild(td(
+      `<span class="tag ${c.match_state}" title="${esc(why)}">` +
+      `${MATCH_LT[c.match_state] || c.match_state}</span>` +
+      (c.match_state === 'near' && why
+        ? `<small class="miss">${esc(why)}</small>` : '')));
     tr.appendChild(td(
       `<span class="tag ${c.verdict}" title="${esc(c.verdict_reason)}">${VERDICT_LT[c.verdict]}</span>`));
     body.appendChild(tr);
@@ -569,7 +591,7 @@ function wire() {
     $(id).addEventListener('input', () => {
       clearTimeout(TIMER); TIMER = setTimeout(loadCandidates, 300);
     }));
-  ['fMuni', 'fVerdict', 'fSort', 'fArchived', 'fProfile'].forEach((id) =>
+  ['fMuni', 'fVerdict', 'fSort', 'fArchived', 'fProfile', 'fMatchState'].forEach((id) =>
     $(id).addEventListener('change', loadCandidates));
 
   $('btnClear').onclick = () => {

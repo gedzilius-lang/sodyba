@@ -289,3 +289,20 @@ tr.is-archived{opacity:.42}
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
+
+/* Near-miss rows: present, visibly secondary, never mistaken for a match. */
+tr.is-near { opacity: .72; }
+tr.is-near:hover { opacity: 1; }
+.tag.near { background: #6b5b2e; color: #f5e9c8; }
+.tag.match { background: #2e5b3a; color: #d9f0df; }
+small.miss {
+  display: block;
+  margin-top: .2rem;
+  font-size: .74rem;
+  line-height: 1.25;
+  color: var(--muted, #9aa0a6);
+}
+
+/* Merged-duplicate indicator: a dedupe merge is otherwise only visible by
+   opening the row and reading its notes. */
+.chip-dup { background: rgba(200,152,58,.18); color: var(--ochre); cursor: help; }
