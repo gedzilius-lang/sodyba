@@ -29,6 +29,17 @@ _STOP = {"parduodama", "parduodamas", "parduodu", "sodyba", "sodybą", "sodybos"
          "namas", "namą", "skelbimas", "rajone", "rajono",
          "prie", "netoli", "šalia", "su", "apie"}
 
+# Lithuanian declines heavily: the same feature appears as "ežero" on one
+# portal and "ežeras" on another. Comparing whole words scores those at zero.
+# Four characters is the stem length filters.py already matches on
+# (WATER_WORDS = ["ežer", ...]), so the two modules agree about what a
+# keyword is.
+STEM_LEN = 4
+
+
+def _stem(word: str) -> str:
+    return word[:STEM_LEN]
+
 
 def fingerprint(listing: dict[str, Any]) -> str:
     """Stable identity for one source's own re-sends. Query strings ignored."""
@@ -44,11 +55,14 @@ def title_tokens(title: str | None, *place: str | None) -> set[str]:
     """Words worth comparing: generic property vocabulary and the listing's
     own place names are removed. Municipality is already an exact-match gate,
     so district words appear in both titles by construction and only inflate
-    the score."""
-    noise = set(_STOP)
+    the score. Words are stemmed to STEM_LEN so that Lithuanian declension
+    (ežero/ežeras, pirtimi/pirtis) does not defeat the comparison — all three
+    sides (title words, stop words, place words) must be stemmed, or the
+    subtraction stops working."""
+    noise = {_stem(w) for w in _STOP}
     for p in place:
-        noise |= {w.lower() for w in _WORD_RE.findall(p or "")}
-    return {w.lower() for w in _WORD_RE.findall(title or "")} - noise
+        noise |= {_stem(w.lower()) for w in _WORD_RE.findall(p or "")}
+    return {_stem(w.lower()) for w in _WORD_RE.findall(title or "")} - noise
 
 
 def _close(a: Any, b: Any, tol: float) -> bool:

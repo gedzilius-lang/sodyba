@@ -1,3 +1,5 @@
+import pytest
+
 from backend.app import dedupe
 
 A = {"source": "rinka", "municipality": "Utenos rajono", "locality": "Kirdeikių k.",
@@ -61,8 +63,9 @@ def test_different_villages_are_never_duplicates():
 
 
 def test_district_words_in_the_title_do_not_inflate_similarity():
+    # tokens are stemmed to 4 chars (round 3): "ežero" -> "ežer"
     assert dedupe.title_tokens("Sodyba Utenos rajone prie ežero",
-                               "Utenos rajono", "Kirdeikių k.") == {"ežero"}
+                               "Utenos rajono", "Kirdeikių k.") == {"ežer"}
 
 
 def test_same_property_from_another_portal_still_merges():
@@ -91,3 +94,23 @@ def test_cadastral_number_still_overrides_a_locality_difference():
     b = {"municipality": "Kitas rajonas", "locality": "Baibių k.",
          "cadastral_no": "4400/0123:45", "price_eur": 1, "title": "kitas"}
     assert dedupe.is_duplicate(a, b)
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Sodyba prie ežero",       "Sodyba, ežeras"),
+    ("Sodyba su pirtimi",       "Sodyba, pirtis"),
+    ("Sodyba su tvenkiniu",     "Sodyba, tvenkinys"),
+    ("Sodyba miško apsuptyje",  "Sodyba, miškas"),
+    ("Sodyba su garažu",        "Sodyba, garažas"),
+])
+def test_inflected_forms_of_the_same_feature_match(a, b):
+    """Two portals decline the same word differently; stems must still agree."""
+    ta = dedupe.title_tokens(a, "Utenos rajono", None)
+    tb = dedupe.title_tokens(b, "Utenos rajono", None)
+    assert ta & tb, f"{ta} and {tb} share nothing"
+
+
+def test_stemming_does_not_merge_genuinely_different_features():
+    ta = dedupe.title_tokens("Sodyba su tvenkiniu", "Utenos rajono", None)
+    tb = dedupe.title_tokens("Sodyba su baseinu", "Utenos rajono", None)
+    assert not (ta & tb)
