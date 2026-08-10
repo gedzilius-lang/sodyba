@@ -52,6 +52,10 @@ UTILITY_WORDS = ["elektra", "gręžin", "šulin", "vandentiek"]
 JUNK_WORDS = ["dalis", "1/2", "1/3", "1/4", "be žemės", "sodo bendrij",
               "daugiabut", "butas", "garaž"]
 
+# A one-character substring matches nearly every listing, so a keyword this
+# short cannot express a real search. Dropped on read, refused on write.
+MIN_KEYWORD_LEN = 2
+
 PRESETS: list[dict[str, Any]] = [
     {
         "key": "forest_homestead",
@@ -225,20 +229,23 @@ def normalise_groups(raw: Any) -> list[dict[str, Any]]:
 
     Total by contract: never raises, and drops anything malformed rather than
     coercing it (a string is not a list of its characters, a group without a
-    proper "words" list is not a group). _keyword_misses calls this on
-    whatever is already in storage, so a bad stored value must not break
-    ingestion.
+    proper "words" list is not a group). Words shorter than MIN_KEYWORD_LEN
+    are dropped too — a single character substring-matches almost anything,
+    which would leave a profile looking configured while filtering nothing.
+    A group left with no words after that is dropped, same as an empty group.
+    _keyword_misses calls this on whatever is already in storage, so a bad
+    stored value must not break ingestion.
     """
     if not isinstance(raw, list) or not raw:
         return []
     if all(isinstance(x, str) for x in raw):
-        words = [x.strip() for x in raw if x.strip()]
+        words = [x.strip() for x in raw if len(x.strip()) >= MIN_KEYWORD_LEN]
         return [{"name": "raktažodžiai", "words": words}] if words else []
     out = []
     for g in raw:
         if isinstance(g, str):
             g = g.strip()
-            if g:
+            if len(g) >= MIN_KEYWORD_LEN:
                 out.append({"name": g, "words": [g]})
             continue
         if not isinstance(g, dict):
@@ -246,7 +253,8 @@ def normalise_groups(raw: Any) -> list[dict[str, Any]]:
         raw_words = g.get("words")
         if not isinstance(raw_words, list):
             continue
-        words = [str(w).strip() for w in raw_words if str(w).strip()]
+        words = [str(w).strip() for w in raw_words
+                 if len(str(w).strip()) >= MIN_KEYWORD_LEN]
         if words:
             out.append({"name": str(g.get("name") or "raktažodžiai").strip(),
                         "words": words})

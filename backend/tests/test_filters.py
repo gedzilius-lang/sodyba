@@ -159,13 +159,32 @@ def test_normalise_groups_never_raises_on_malformed_input():
         assert f.normalise_groups(bad) == []
 
 
-def test_no_group_ever_contains_single_character_words():
-    # single-char words substring-match nearly everything, silently
-    # turning a configured profile into a no-op
-    for bad in ("mišk", [{"name": "v", "words": "ežeras"}],
-                {"name": "x", "words": ["y"]}):
-        for g in f.normalise_groups(bad):
-            assert all(len(w) > 1 for w in g["words"])
+def test_short_words_are_dropped_but_the_group_survives():
+    assert f.normalise_groups(["a", "mišk"]) == [
+        {"name": "raktažodžiai", "words": ["mišk"]}]
+    assert f.normalise_groups([{"name": "vanduo", "words": ["a", "ežer"]}]) == [
+        {"name": "vanduo", "words": ["ežer"]}]
+
+
+def test_a_group_of_only_short_words_is_dropped_entirely():
+    assert f.normalise_groups(["a"]) == []
+    assert f.normalise_groups([{"name": "v", "words": ["a", "b"]}]) == []
+
+
+def test_no_group_ever_contains_a_single_character_word():
+    # inputs chosen so groups ARE built — otherwise this asserts nothing
+    for raw in (["a", "mišk"],
+                [{"name": "vanduo", "words": ["a", "ežer"]}],
+                ["mišk", "giri"]):
+        groups = f.normalise_groups(raw)
+        assert groups, f"expected at least one group for {raw!r}"
+        for g in groups:
+            assert all(len(w) >= f.MIN_KEYWORD_LEN for w in g["words"])
+
+
+def test_sanitise_rejects_a_require_any_of_only_short_words():
+    with pytest.raises(ValueError):
+        f.sanitise({"name": "X", "require_any": ["a"]})
 
 
 def test_mixed_list_keeps_only_the_valid_entries():
