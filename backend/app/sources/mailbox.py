@@ -87,6 +87,57 @@ _INSERT_SQL = (
 )
 
 
+def _loads_obj(raw: str | None) -> dict[str, Any]:
+    """Stored JSON object, or an empty one. Never raises on a malformed column."""
+    try:
+        v = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return v if isinstance(v, dict) else {}
+
+
+def _merge_profiles(raw: str | None, hits: list[str]) -> list[str]:
+    """Union of the stored profile keys and the incoming ones, stored order first."""
+    try:
+        stored = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        stored = []
+    out = [str(k) for k in stored] if isinstance(stored, list) else []
+    for k in hits:
+        if k not in out:
+            out.append(k)
+    return out
+
+
+def _promote(cx, twin: dict[str, Any], listing: dict[str, Any],
+             hits: list[str]) -> None:
+    """Turn a stored near-miss row into the match a newcomer has proved it is.
+
+    Dedupe's tolerances are far tighter than the near-miss ones (5% on price
+    against 25%), so a listing that genuinely satisfies a profile routinely
+    arrives after a slightly pricier near-miss of the same property. Merging
+    it away hides a qualifying property behind a row the default view filters
+    out, and no notification is ever sent — a silently lost listing.
+
+    The promotion has to carry the newcomer's price with it. A row claiming
+    `match` while showing the price that missed the ceiling states something
+    that contradicts itself, and a confidently wrong number is worse than the
+    near-miss it replaced.
+    """
+    price = listing.get("price_eur")
+    costs = _loads_obj(twin.get("costs_json"))
+    if price is None:
+        price = twin.get("price_eur")     # nothing better on offer, keep what we have
+    else:
+        costs["purchase"] = price
+    cx.execute(
+        "UPDATE candidate SET match_state='match', misses_json='{}', profiles_json=?, "
+        "price_eur=?, costs_json=?, updated_at=datetime('now') WHERE id=?",
+        (json.dumps(_merge_profiles(twin.get("profiles_json"), hits),
+                    ensure_ascii=False),
+         price, json.dumps(costs), twin["id"]))
+
+
 def _insert(listing: dict[str, Any], hits: list[str], fp: str,
             state: str = "match", misses: dict[str, Any] | None = None) -> str | None:
     from ..api import settings
@@ -98,7 +149,8 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
         if cx.execute("SELECT 1 FROM candidate WHERE fingerprint=?", (fp,)).fetchone():
             return None
         siblings = [dict(r) for r in cx.execute(
-            "SELECT id,ref,cadastral_no,municipality,locality,price_eur,house_m2,plot_ares,title "
+            "SELECT id,ref,cadastral_no,municipality,locality,price_eur,house_m2,plot_ares,"
+            "title,match_state,costs_json,profiles_json "
             "FROM candidate WHERE municipality IS ? OR cadastral_no IS NOT NULL",
             (listing.get("municipality"),)).fetchall()]
         twin = find_duplicate(listing, siblings)
@@ -121,6 +173,13 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
                 "UPDATE candidate SET notes = COALESCE(notes,'') || ?, "
                 "updated_at=datetime('now') WHERE id=?",
                 ("\n" + " · ".join(bits), twin["id"]))
+            if state == "match" and twin["match_state"] == "near":
+                _promote(cx, twin, listing, hits)
+                # The caller decides what to notify with `if ref and hits:`, so
+                # the twin's ref is what turns a promotion into a push. The
+                # fingerprint short-circuit above means a re-send of the same
+                # listing never reaches here, so this cannot push twice.
+                return twin["ref"]
             return None
         ref = _next_ref(cx)
         cx.execute(_INSERT_SQL, (
