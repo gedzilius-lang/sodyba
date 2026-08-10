@@ -187,3 +187,33 @@ def test_words_merely_containing_a_noise_stem_do_not_suppress_a_cadastral(text):
 ])
 def test_reference_numbers_are_still_rejected(text):
     assert parsers.cadastral_no(text) is None
+
+
+# A city municipality and a district municipality of the same name are two
+# separate entries in config.ALL_MUNICIPALITIES, and dedupe.is_duplicate
+# gates on municipality by exact match — so labelling "Kauno m. sav." as
+# "Kauno rajono" both states something false and makes a city flat a merge
+# candidate for a district homestead.
+
+@pytest.mark.parametrize("text,expected", [
+    ("Butas Kauno miesto sav., 2 kambariai", "Kauno miesto"),
+    ("Vilniaus m. sav., Antakalnis", "Vilniaus miesto"),
+    ("Parduodama sodyba Kauno r., 20 arų", "Kauno rajono"),
+    ("Sodyba Utenos rajone prie ežero", "Utenos rajono"),
+])
+def test_municipality_from_keeps_city_and_district_apart(text, expected):
+    assert parsers.municipality_from(text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Butas Kauno miesto sav., 2 kambariai, 45000 EUR", "Kauno miesto"),
+    ("Vilniaus m. sav., Antakalnis, 60000 EUR", "Vilniaus miesto"),
+    ("Parduodama sodyba Kauno r., 20 arų, 17000 EUR", "Kauno rajono"),
+])
+def test_common_reports_the_municipality_that_actually_matched(text, expected):
+    assert parsers._common(text)["municipality"] == expected
+
+
+def test_municipality_from_returns_none_when_nothing_matches():
+    assert parsers.municipality_from("Parduodama sodyba prie ežero") is None
+    assert parsers.municipality_from("") is None

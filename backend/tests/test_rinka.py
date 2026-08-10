@@ -92,3 +92,20 @@ def test_parse_detail_tidies_a_punctuation_run_left_by_flattened_markup():
         "Išskirtinė sodyba. Vienkemis. Apsodinta ąžuolais, "
         "beržais, spygliuočiais."
     )
+
+
+def test_parse_detail_does_not_relabel_a_city_municipality_as_a_district():
+    # rinka.lt lists city flats alongside rural property. "Kauno m. sav." and
+    # "Kauno rajono" are different municipalities, and dedupe compares this
+    # field exactly, so the adapter must not turn one into the other.
+    html = ('<html><body><h1>Parduodamas butas Kauno m. sav.</h1>'
+            '<div class="description">2 kambariai, 45 kv. m.</div>'
+            '<span class="price">Kaina: 45000,00 &euro;</span></body></html>')
+    assert rinka.parse_detail(html, URL)["municipality"] == "Kauno miesto"
+
+
+def test_parse_detail_still_reads_a_district_from_the_heading():
+    html = ('<html><body><h1>Parduodama sodyba Ignalinos r.</h1>'
+            '<div class="description">Sklypas 30 arų.</div>'
+            '<span class="price">Kaina: 17000,00 &euro;</span></body></html>')
+    assert rinka.parse_detail(html, URL)["municipality"] == "Ignalinos rajono"

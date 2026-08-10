@@ -77,8 +77,11 @@ def parse_detail(html: str, url: str) -> dict[str, Any]:
     d["title"] = (title or "")[:180] or None
 
     # Municipality: heading first, content block second. Never the whole page.
-    muni = parsers.MUNI_RE.search(title or "") or parsers.MUNI_RE.search(body)
-    d["municipality"] = f"{muni.group(1)} rajono" if muni else None
+    # Formatting goes through parsers.municipality_from so a city municipality
+    # ("Kauno m. sav.") is not relabelled as the district of the same name --
+    # they are separate municipalities, and dedupe compares this field exactly.
+    d["municipality"] = (parsers.municipality_from(title or "")
+                         or parsers.municipality_from(body))
 
     d["source"] = KEY
     d["url"] = url

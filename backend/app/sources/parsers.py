@@ -112,18 +112,42 @@ def cadastral_no(text: str) -> str | None:
     return None
 
 
+def municipality_from(text: str) -> str | None:
+    """Municipality in the form config.ALL_MUNICIPALITIES uses, or None.
+
+    A city municipality and a district municipality are two different entries
+    in that list — "Kauno miesto" and "Kauno rajono" both exist — so the
+    pattern that matched decides the suffix. Formatting every match as
+    "X rajono" turned "Vilniaus m. sav." into "Vilniaus rajono": a name that
+    is real, confidently wrong, and belongs to somewhere else entirely.
+
+    This is load-bearing beyond display. dedupe.is_duplicate gates on
+    municipality by exact match, so a city flat mislabelled as a district
+    becomes a merge candidate for a district homestead.
+
+    District first, matching the original precedence: a text carrying both
+    forms is far likelier to be a district listing that mentions a city.
+    """
+    m = MUNI_RE.search(text or "")
+    if m:
+        return f"{m.group(1)} rajono"
+    m = CITY_RE.search(text or "")
+    if m:
+        return f"{m.group(1)} miesto"
+    return None
+
+
 def _common(text: str) -> dict[str, Any]:
     plot = _f(PLOT_RE.search(text))
     if plot is None:
         ha = _f(HA_RE.search(text))
         plot = ha * 100 if ha is not None else None
-    muni = MUNI_RE.search(text) or CITY_RE.search(text)
     loc = LOCALITY_RE.search(text)
     return {
         "price_eur": _f(PRICE_RE.search(text)),
         "house_m2": _f(AREA_RE.search(text)),
         "plot_ares": plot,
-        "municipality": f"{muni.group(1)} rajono" if muni else None,
+        "municipality": municipality_from(text),
         "locality": f"{loc.group(1)} k." if loc else None,
         "cadastral_no": cadastral_no(text),
     }
