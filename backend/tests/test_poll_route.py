@@ -134,6 +134,39 @@ def test_ingest_poll_does_not_reach_the_network(monkeypatch):
     assert r.status_code == 200
 
 
+# --------------------------------------------------------- the scheduled job
+def test_the_scheduled_job_pushes_only_full_matches(monkeypatch):
+    """scheduled_poll runs unattended on a timer, with nobody watching the
+    result — unlike the route above, which only ever runs when someone
+    presses a button and sees the response. main.py builds `created` with
+    its own separate comprehension, so a future edit could widen it without
+    the route-level tests above ever turning red. If that happened here,
+    every near-miss would be pushed to Telegram on every tick."""
+    import backend.app.main as m
+
+    pushed = []
+
+    async def fake_push(items):
+        pushed.extend(items)
+
+    async def fake_poll_all(fetch=None):
+        return {"rinka": {"status": "ok",
+                          "created": [{"ref": "K001",
+                                       "title": "Tikras atitikmuo prie ežero"}],
+                          "near": [{"ref": "K002",
+                                    "title": "Meškeriotojo masalas — privilioja, "
+                                             "bet neatitinka"}],
+                          "scanned": 2, "rejected": 0}}
+
+    monkeypatch.setattr(m, "poll_all", fake_poll_all)
+    monkeypatch.setattr(m.notify, "push", fake_push)
+
+    asyncio.run(m.scheduled_poll())
+
+    assert [p["ref"] for p in pushed] == ["K001"]
+    assert not any("K002" in str(p) or "masalas" in str(p).lower() for p in pushed)
+
+
 # ----------------------------------------- poll_all's own PolicyError handling
 def test_poll_all_turns_a_policy_error_into_a_per_source_error_status(monkeypatch):
     """poll_source raises PolicyError for a non-POLL source (see

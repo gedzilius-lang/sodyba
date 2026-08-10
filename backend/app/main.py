@@ -17,7 +17,7 @@ from .config import (DEFAULT_MUNICIPALITIES, FRONTEND_DIR, MAILBOX_POLL_MINUTES,
 from .db import get_setting, init_db
 from .sources import (refresh_market_stock, poll_mailbox, mailbox_configured,
                       refresh_water, refresh_places, refresh_protected,
-                      poll_all, registry)
+                      poll_all, POLLED, registry)
 from . import notify
 
 logging.basicConfig(level=logging.INFO,
@@ -92,9 +92,11 @@ async def lifespan(app: FastAPI):
 
     sched.add_job(scheduled_poll, IntervalTrigger(minutes=POLL_MINUTES),
                   id="source_poll", max_instances=1, coalesce=True)
-    log.info("source polling every %s min: %s", POLL_MINUTES,
-             ", ".join(s.key for s in registry.SOURCES
-                       if s.policy == registry.POLL))
+    log.info("source polling every %s min: %s", POLL_MINUTES, ", ".join(POLLED))
+    awaiting = [s.key for s in registry.SOURCES
+                if s.policy == registry.POLL and s.key not in POLLED]
+    if awaiting:
+        log.info("permitted but not yet polled (no adapter): %s", ", ".join(awaiting))
 
     stale = registry.stale(date.today().isoformat())
     if stale:
