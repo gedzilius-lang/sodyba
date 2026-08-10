@@ -401,7 +401,10 @@ def get_profiles() -> dict[str, Any]:
 def put_profiles(body: ProfilesIn) -> dict[str, Any]:
     cleaned, seen = [], set()
     for raw in body.profiles:
-        p = sanitise(raw)
+        try:
+            p = sanitise(raw)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
         if p["key"] in seen:
             raise HTTPException(400, f"pasikartojantis profilio raktas: {p['key']}")
         seen.add(p["key"])

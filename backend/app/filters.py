@@ -222,22 +222,50 @@ def normalise_groups(raw: Any) -> list[dict[str, Any]]:
 
     v1 stored a flat list of words. One flat list becomes one group, which under
     the all-groups-must-hit rule behaves exactly as v1 did.
+
+    Total by contract: never raises, and drops anything malformed rather than
+    coercing it (a string is not a list of its characters, a group without a
+    proper "words" list is not a group). _keyword_misses calls this on
+    whatever is already in storage, so a bad stored value must not break
+    ingestion.
     """
-    if not raw:
+    if not isinstance(raw, list) or not raw:
         return []
     if all(isinstance(x, str) for x in raw):
-        return [{"name": "raktažodžiai",
-                 "words": [str(x).strip() for x in raw if str(x).strip()]}]
+        words = [x.strip() for x in raw if x.strip()]
+        return [{"name": "raktažodžiai", "words": words}] if words else []
     out = []
     for g in raw:
         if isinstance(g, str):
-            out.append({"name": g, "words": [g]})
+            g = g.strip()
+            if g:
+                out.append({"name": g, "words": [g]})
             continue
-        words = [str(w).strip() for w in (g.get("words") or []) if str(w).strip()]
+        if not isinstance(g, dict):
+            continue
+        raw_words = g.get("words")
+        if not isinstance(raw_words, list):
+            continue
+        words = [str(w).strip() for w in raw_words if str(w).strip()]
         if words:
             out.append({"name": str(g.get("name") or "raktažodžiai").strip(),
                         "words": words})
     return out
+
+
+def validated_groups(raw: Any) -> list[dict[str, Any]]:
+    """Write-path check. Empty input is fine; unusable input is not.
+
+    Reading stays forgiving (normalise_groups above never raises), but writing
+    rejects junk instead of silently turning it into an empty or nonsensical
+    filter — see the "fail loudly" precedent at api.py's radius-centre lookup.
+    """
+    groups = normalise_groups(raw)
+    if raw and not groups:
+        raise ValueError(
+            "require_any: netinkamas formatas — laukiamas žodžių sąrašas "
+            "arba grupių sąrašas [{name, words}]")
+    return groups
 
 
 def _keyword_misses(hay: str, profile: dict[str, Any]) -> list[Miss]:
@@ -335,12 +363,17 @@ def match_all(listing: dict[str, Any], profiles: list[dict[str, Any]]) -> list[s
 
 
 def sanitise(raw: dict[str, Any]) -> dict[str, Any]:
-    """Coerce a client-supplied profile into the expected shape."""
+    """Coerce a client-supplied profile into the expected shape.
+
+    Raises ValueError if require_any is present but unusable (see
+    validated_groups) — writing rejects junk that reading would otherwise
+    silently accept as an empty, no-op filter.
+    """
     out: dict[str, Any] = {}
     for f in FIELDS:
         v = raw.get(f)
         if f == "require_any":
-            out[f] = normalise_groups(v)
+            out[f] = validated_groups(v)
         elif f in ("municipalities", "require_all", "exclude_any",
                    "sources", "centres"):
             out[f] = [str(x).strip() for x in (v or []) if str(x).strip()]

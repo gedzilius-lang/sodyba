@@ -1,3 +1,5 @@
+import pytest
+
 from backend.app import filters as f
 
 PROFILE = {
@@ -141,3 +143,43 @@ def test_sanitise_preserves_groups():
     p = f.sanitise({"name": "X", "require_any": [
         {"name": "vanduo", "words": ["ežer"]}]})
     assert p["require_any"] == [{"name": "vanduo", "words": ["ežer"]}]
+
+
+def test_well_formed_inputs_are_unaffected():
+    assert f.normalise_groups(["mišk", "giri"]) == [
+        {"name": "raktažodžiai", "words": ["mišk", "giri"]}]
+    assert f.normalise_groups([{"name": "vanduo", "words": ["ežer"]}]) == [
+        {"name": "vanduo", "words": ["ežer"]}]
+
+
+def test_normalise_groups_never_raises_on_malformed_input():
+    for bad in (42, None, "mišk", [None], [1, 2, 3],
+                {"name": "x", "words": ["y"]},
+                [{"name": "v", "words": "ežeras"}]):
+        assert f.normalise_groups(bad) == []
+
+
+def test_no_group_ever_contains_single_character_words():
+    # single-char words substring-match nearly everything, silently
+    # turning a configured profile into a no-op
+    for bad in ("mišk", [{"name": "v", "words": "ežeras"}],
+                {"name": "x", "words": ["y"]}):
+        for g in f.normalise_groups(bad):
+            assert all(len(w) > 1 for w in g["words"])
+
+
+def test_mixed_list_keeps_only_the_valid_entries():
+    assert f.normalise_groups(
+        [{"name": "vanduo", "words": ["ežer"]}, None, 7,
+         {"name": "bad", "words": "x"}]) == [
+        {"name": "vanduo", "words": ["ežer"]}]
+
+
+def test_sanitise_rejects_unusable_require_any():
+    for bad in ("mišk", [None], [{"name": "v", "words": "ežeras"}]):
+        with pytest.raises(ValueError):
+            f.sanitise({"name": "X", "require_any": bad})
+
+
+def test_sanitise_accepts_an_absent_require_any():
+    assert f.sanitise({"name": "X"})["require_any"] == []
