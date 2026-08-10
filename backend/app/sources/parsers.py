@@ -220,17 +220,48 @@ def parse_generic(text: str) -> dict[str, Any]:
     return d
 
 
+parse_aruodas = _classified("aruodas", "aruodas.lt")
+parse_domoplius = _classified("domoplius", "domoplius.lt")
+parse_alio = _classified("alio", "alio.lt")
+parse_skelbiu = _classified("skelbiu", "skelbiu.lt")
+parse_rinka = _classified("rinka", "rinka.lt")
+
 # sender-domain / subject fragment -> parser
 ROUTES: list[tuple[str, Callable[[str], dict[str, Any]]]] = [
     ("evarzytynes.lt", parse_evarzytynes),
     ("registrucentras.lt", parse_evarzytynes),
     ("turtas.lt", parse_turtas),
-    ("aruodas.lt", _classified("aruodas", "aruodas.lt")),
-    ("domoplius.lt", _classified("domoplius", "domoplius.lt")),
-    ("alio.lt", _classified("alio", "alio.lt")),
-    ("skelbiu.lt", _classified("skelbiu", "skelbiu.lt")),
-    ("rinka.lt", _classified("rinka", "rinka.lt")),
+    ("aruodas.lt", parse_aruodas),
+    ("domoplius.lt", parse_domoplius),
+    ("alio.lt", parse_alio),
+    ("skelbiu.lt", parse_skelbiu),
+    ("rinka.lt", parse_rinka),
 ]
+
+# Declared source key -> parser. ROUTES is keyed on domain fragments, which a
+# caller that already knows the portal ("evarzytynes") cannot match against;
+# this is the mapping for that caller. Sniffing the text is a guess, and on an
+# auction notice a wrong guess is the difference between the starting price
+# and the market valuation — 25000 against 40000 on the same property.
+BY_SOURCE: dict[str, Callable[[str], dict[str, Any]]] = {
+    "evarzytynes": parse_evarzytynes,
+    "turtas": parse_turtas,
+    "aruodas": parse_aruodas,
+    "domoplius": parse_domoplius,
+    "alio": parse_alio,
+    "skelbiu": parse_skelbiu,
+    "rinka": parse_rinka,
+}
+
+
+def parser_for(source: str | None) -> Callable[[str], dict[str, Any]] | None:
+    """The parser a declared source key names, or None if it names nothing.
+
+    None is the honest answer for "manual", "facebook" and anything unknown:
+    those have no portal format, so the caller should fall back to sniffing
+    rather than being handed an arbitrary parser.
+    """
+    return BY_SOURCE.get((source or "").strip().lower())
 
 
 def route(sender: str, subject: str, body: str) -> dict[str, Any]:

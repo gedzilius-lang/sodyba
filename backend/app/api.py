@@ -331,13 +331,22 @@ def paste(body: PasteIn) -> dict[str, Any]:
     Numeric and location fields go through parsers.route() rather than a local
     copy of its regexes, so a fix to the parser (e.g. decimal-tail prices,
     NBSP thousands separators) applies here too instead of silently diverging.
+
+    The declared source wins over sniffing the text. route() picks its parser
+    by looking for a portal domain in the body, so pasting an auction notice
+    without its URL fell through to the generic parser and reported the market
+    valuation where the auction parser reads the starting price — 40000 rather
+    than 25000 on the same property, decided by whether the user happened to
+    copy the link. Sniffing stays as the fallback for "manual", "facebook" and
+    anything else with no portal format of its own.
     """
     t = body.text.strip()
     if not t:
         raise HTTPException(400, "empty text")
 
     from .sources import parsers
-    parsed = parsers.route("", "", body.text)
+    fn = parsers.parser_for(body.source)
+    parsed = fn(parsers.to_text(body.text)) if fn else parsers.route("", "", body.text)
 
     return create_candidate(CandidateIn(
         source=body.source,

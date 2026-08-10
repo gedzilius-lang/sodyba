@@ -75,3 +75,61 @@ def test_no_price_returns_201_with_null_price():
     r = _paste("Sodyba prie ežero, gražus vaizdas")
     assert r.status_code == 201
     assert r.json()["price_eur"] is None
+
+
+# The declared source must beat sniffing the text. route() picks its parser by
+# scanning the body for a portal domain, so the same auction notice reported
+# the starting price (25000) with its URL pasted and the market valuation
+# (40000) without it — a 60% swing on one property, decided by what the user
+# happened to copy.
+AUCTION_WITH_URL = (
+    "Varžytynės: parduodamas gyvenamasis namas Utenos r.\n"
+    "Rinkos vertė 40000 EUR. Pradinė pardavimo kaina 25000 EUR.\n"
+    "https://www.evarzytynes.lt/lt/turtas/12345"
+)
+AUCTION_NO_URL = (
+    "Varžytynės: parduodamas gyvenamasis namas Utenos r.\n"
+    "Rinkos vertė 40000 EUR. Pradinė pardavimo kaina 25000 EUR."
+)
+
+
+def test_declared_auction_source_reads_the_starting_price_with_the_url():
+    r = client.post("/api/paste",
+                    json={"text": AUCTION_WITH_URL, "source": "evarzytynes"})
+    assert r.status_code == 201
+    assert r.json()["price_eur"] == 25000.0
+
+
+def test_declared_auction_source_reads_the_starting_price_without_the_url():
+    # This is the case the old text-sniffing route got wrong: no domain in the
+    # body, so it fell through to the generic parser and reported 40000.
+    r = client.post("/api/paste",
+                    json={"text": AUCTION_NO_URL, "source": "evarzytynes"})
+    assert r.status_code == 201
+    assert r.json()["price_eur"] == 25000.0
+
+
+def test_manual_source_still_falls_back_to_sniffing_the_text():
+    # "manual" names no portal format, so the URL in the body is the only
+    # evidence available and must still be used.
+    r = client.post("/api/paste",
+                    json={"text": AUCTION_WITH_URL, "source": "manual"})
+    assert r.status_code == 201
+    assert r.json()["price_eur"] == 25000.0
+
+
+def test_unknown_source_falls_back_to_sniffing_the_text():
+    r = client.post("/api/paste",
+                    json={"text": AUCTION_WITH_URL, "source": "kazkoks-portalas"})
+    assert r.status_code == 201
+    assert r.json()["price_eur"] == 25000.0
+
+
+def test_a_classified_source_is_routed_by_its_declared_key():
+    r = client.post("/api/paste", json={
+        "text": "Parduodama sodyba Ignalinos r., 30 arų, 17000 EUR",
+        "source": "aruodas"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["price_eur"] == 17000.0
+    assert body["municipality"] == "Ignalinos rajono"
