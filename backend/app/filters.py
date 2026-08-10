@@ -11,6 +11,29 @@ each preset is chosen, not decorative.
 from __future__ import annotations
 import re
 from typing import Any
+from dataclasses import dataclass, field as dc_field
+
+HARD, SOFT = "hard", "soft"
+MATCH, NEAR, REJECT = "match", "near", "reject"
+
+
+@dataclass
+class Miss:
+    field: str
+    kind: str                     # HARD | SOFT
+    text: str                     # shown in the UI, Lithuanian
+    delta: float | None = None    # how far outside, in the field's own unit
+
+
+@dataclass
+class ProfileMatch:
+    key: str
+    state: str                    # MATCH | NEAR | REJECT
+    misses: list[Miss] = dc_field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return {"key": self.key, "state": self.state,
+                "misses": [vars(m) for m in self.misses]}
 
 # Municipalities ranked by rarity index (share with utilities x share pre-1945),
 # computed from the NTR open data.
@@ -119,10 +142,25 @@ def _norm(s: str | None) -> str:
     return (s or "").lower()
 
 
-def matches(listing: dict[str, Any], profile: dict[str, Any]) -> tuple[bool, str]:
-    """Test one listing against one profile. Returns (matched, reason_if_not)."""
+def evaluate(listing: dict[str, Any], profile: dict[str, Any]) -> ProfileMatch:
+    """Test a listing against a profile, reporting EVERY miss.
+
+    v1 returned on the first failure, which made "5% over the price ceiling"
+    indistinguishable from "wrong in six ways" — and discarded both. Soft misses
+    are ones a slightly different profile would have accepted; hard misses are
+    structural and no profile edit would rescue them.
+    """
+    key = profile.get("key", "")
+    misses: list[Miss] = []
+
+    def hard(fieldname: str, text: str, delta: float | None = None) -> None:
+        misses.append(Miss(fieldname, HARD, text, delta))
+
+    def soft(fieldname: str, text: str, delta: float | None = None) -> None:
+        misses.append(Miss(fieldname, SOFT, text, delta))
+
     if not profile.get("enabled", True):
-        return False, "profilis išjungtas"
+        return ProfileMatch(key, REJECT, [Miss("enabled", HARD, "profilis išjungtas")])
 
     hay = " ".join(filter(None, [
         _norm(listing.get("title")), _norm(listing.get("notes")),
@@ -132,91 +170,139 @@ def matches(listing: dict[str, Any], profile: dict[str, Any]) -> tuple[bool, str
     src = listing.get("source")
     allowed = profile.get("sources") or []
     if allowed and src not in allowed:
-        return False, f"šaltinis {src} ne profilyje"
+        hard("sources", f"šaltinis {src} ne profilyje")
 
     price = listing.get("price_eur")
     lo, hi = profile.get("min_price"), profile.get("max_price")
     if price is not None:
         if lo is not None and price < lo:
-            return False, f"kaina {price:.0f} < {lo}"
+            soft("price", f"kaina {price:,.0f} < {lo:,.0f} EUR".replace(",", " "),
+                 lo - price)
         if hi is not None and price > hi:
-            return False, f"kaina {price:.0f} > {hi}"
+            soft("price", f"kaina {price:,.0f} > {hi:,.0f} EUR".replace(",", " "),
+                 price - hi)
 
     munis = profile.get("municipalities") or []
     muni = listing.get("municipality")
     if munis and muni and muni not in munis:
-        return False, f"{muni} ne profilio sąraše"
+        soft("municipality", f"{muni} ne profilio sąraše")
 
     plot = listing.get("plot_ares")
-    if plot is not None and profile.get("min_plot_ares") and plot < profile["min_plot_ares"]:
-        return False, f"sklypas {plot} a < {profile['min_plot_ares']} a"
+    need_plot = profile.get("min_plot_ares")
+    if plot is not None and need_plot and plot < need_plot:
+        soft("plot_ares", f"sklypas {plot:.0f} a < {need_plot:.0f} a", need_plot - plot)
 
     area = listing.get("house_m2")
-    if area is not None and profile.get("min_house_m2") and area < profile["min_house_m2"]:
-        return False, f"plotas {area} m2 < {profile['min_house_m2']} m2"
+    need_area = profile.get("min_house_m2")
+    if area is not None and need_area and area < need_area:
+        soft("house_m2", f"plotas {area:.0f} m2 < {need_area:.0f} m2", need_area - area)
 
     for w in profile.get("exclude_any") or []:
         if w.lower() in hay:
-            return False, f"rastas draudžiamas žodis „{w}“"
+            hard("exclude_any", f"rastas draudžiamas žodis „{w}“")
 
-    req_all = profile.get("require_all") or []
-    for w in req_all:
+    for w in profile.get("require_all") or []:
         if w.lower() not in hay:
-            return False, f"trūksta privalomo žodžio „{w}“"
+            hard("require_all", f"trūksta privalomo žodžio „{w}“")
 
-    req_any = profile.get("require_any") or []
-    if req_any and not any(w.lower() in hay for w in req_any):
-        return False, "nerastas nė vienas raktažodis"
+    misses.extend(_keyword_misses(hay, profile))
+    misses.extend(_radius_misses(listing, profile))
+    misses.extend(_nature_misses(listing, profile))
 
-    # --- geographic radius around named centres
+    return ProfileMatch(key, _state(misses), misses)
+
+
+def _state(misses: list[Miss]) -> str:
+    """MATCH when clean, REJECT otherwise. Task 6 introduces NEAR here."""
+    return MATCH if not misses else REJECT
+
+
+def _keyword_misses(hay: str, profile: dict[str, Any]) -> list[Miss]:
+    words = profile.get("require_any") or []
+    if not words:
+        return []
+    if any(str(w).lower() in hay for w in words):
+        return []
+    return [Miss("require_any", HARD, "nerastas nė vienas raktažodis")]
+
+
+def _radius_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Miss]:
     centres = profile.get("centres") or []
     radius = profile.get("radius_km")
-    if centres and radius:
-        from .sources.nature import geocode
-        from .geo import dist_m
-        e, n = listing.get("easting"), listing.get("northing")
-        if e is None or n is None:
-            place = (geocode(listing.get("locality"), listing.get("municipality"))
-                     or geocode(listing.get("municipality")))
-            if not place:
-                return False, "vietos nustatyti nepavyko, o profilis riboja spinduliu"
-            e, n = place["easting"], place["northing"]
-        best = None
-        for c in centres:
-            centre = geocode(c)
-            if not centre:
-                continue
-            d = dist_m(e, n, centre["easting"], centre["northing"]) / 1000
-            best = d if best is None else min(best, d)
-        if best is None:
-            return False, "nė vienas profilio centras neatpažintas"
-        if best > float(radius):
-            return False, f"{best:.0f} km nuo artimiausio centro > {radius} km"
+    if not (centres and radius):
+        return []
+    from .sources.nature import geocode
+    from .geo import dist_m
+    e, n = listing.get("easting"), listing.get("northing")
+    if e is None or n is None:
+        place = (geocode(listing.get("locality"), listing.get("municipality"))
+                 or geocode(listing.get("municipality")))
+        if not place:
+            return [Miss("radius_km", HARD,
+                         "vietos nustatyti nepavyko, o profilis riboja spinduliu")]
+        e, n = place["easting"], place["northing"]
+    best = None
+    for c in centres:
+        centre = geocode(c)
+        if not centre:
+            continue
+        d = dist_m(e, n, centre["easting"], centre["northing"]) / 1000
+        best = d if best is None else min(best, d)
+    if best is None:
+        return [Miss("radius_km", HARD, "nė vienas profilio centras neatpažintas")]
+    if best > float(radius):
+        return [Miss("radius_km", SOFT,
+                     f"{best:.0f} km nuo artimiausio centro > {radius:.0f} km",
+                     best - float(radius))]
+    return []
 
-    # --- nature gates, evaluated from measured distances
+
+def _nature_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Miss]:
     nature = listing.get("nature") or {}
     lake, river = nature.get("nearest_lake"), nature.get("nearest_river")
+    out: list[Miss] = []
     ml = profile.get("max_lake_m")
     if ml:
         if not lake:
-            return False, "ežero nerasta"
-        if profile.get("min_lake_ha") and lake["size"] < profile["min_lake_ha"]:
-            return False, f"ežeras {lake['size']:.0f} ha < {profile['min_lake_ha']} ha"
-        if lake["distance_m"] > ml:
-            return False, f"ežeras {lake['distance_m']/1000:.1f} km > {ml/1000:.1f} km"
+            out.append(Miss("max_lake_m", SOFT, "ežero nerasta"))
+        else:
+            need_ha = profile.get("min_lake_ha")
+            if need_ha and lake["size"] < need_ha:
+                out.append(Miss("min_lake_ha", SOFT,
+                                f"ežeras {lake['size']:.0f} ha < {need_ha:.0f} ha",
+                                need_ha - lake["size"]))
+            if lake["distance_m"] > ml:
+                out.append(Miss("max_lake_m", SOFT,
+                                f"ežeras {lake['distance_m']/1000:.1f} km "
+                                f"> {ml/1000:.1f} km",
+                                lake["distance_m"] - ml))
     mr = profile.get("max_river_m")
     if mr:
+        lake_ok = bool(ml and lake and lake["distance_m"] <= ml)
         if not river:
-            return False, "upės nerasta"
-        if river["distance_m"] > mr and not (ml and lake and lake["distance_m"] <= ml):
-            return False, f"upė {river['distance_m']/1000:.1f} km > {mr/1000:.1f} km"
+            if not lake_ok:
+                out.append(Miss("max_river_m", SOFT, "upės nerasta"))
+        elif river["distance_m"] > mr and not lake_ok:
+            out.append(Miss("max_river_m", SOFT,
+                            f"upė {river['distance_m']/1000:.1f} km > {mr/1000:.1f} km",
+                            river["distance_m"] - mr))
+    return out
 
-    return True, ""
+
+def evaluate_all(listing: dict[str, Any],
+                 profiles: list[dict[str, Any]]) -> list[ProfileMatch]:
+    return [evaluate(listing, p) for p in profiles]
+
+
+def matches(listing: dict[str, Any], profile: dict[str, Any]) -> tuple[bool, str]:
+    """v1 signature, kept for api.test_profiles."""
+    r = evaluate(listing, profile)
+    return r.state == MATCH, (r.misses[0].text if r.misses else "")
 
 
 def match_all(listing: dict[str, Any], profiles: list[dict[str, Any]]) -> list[str]:
-    """Return the keys of every profile this listing satisfies."""
-    return [p["key"] for p in profiles if matches(listing, p)[0]]
+    """Keys of every profile this listing fully satisfies."""
+    return [r.key for r in evaluate_all(listing, profiles) if r.state == MATCH]
 
 
 def sanitise(raw: dict[str, Any]) -> dict[str, Any]:
