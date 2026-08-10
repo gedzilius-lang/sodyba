@@ -262,3 +262,38 @@ def test_a_live_listing_is_not_absorbed_into_an_archived_candidate():
     assert len(rows) == 2, "the live listing needs a row of its own"
     live = [r for r in rows if r["url"] == second["url"]]
     assert live and live[0]["archived"] == 0
+
+
+def test_a_promotion_cannot_notify_the_same_listing_twice():
+    """_insert's return value drives notify.push, so a promotion that fired
+    again on a re-send would push the same property repeatedly. It cannot:
+    the second arrival finds the twin already stored as `match`, which is not
+    the near->match transition, so it merges away and returns None. Note the
+    fingerprint short-circuit is NOT what saves us here — the promoted row
+    keeps the near listing's fingerprint, so the newcomer's own fingerprint
+    never matches and the state comparison is the whole guard."""
+    init_db()
+    near = {"source": "rinka", "url": "https://www.rinka.lt/skelbimas/twice-1",
+            "municipality": "Rokiškio rajono", "locality": "Obelių k.",
+            "price_eur": 22000, "house_m2": 95, "plot_ares": 45,
+            "title": "Sodyba su klėtimi ir obelimis", "cadastral_no": None}
+    assert _insert(near, ["lake_shore"], _fingerprint(near), "near",
+                   {"lake_shore": [{"field": "price", "kind": "soft",
+                                    "text": "kaina 22 000 > 20 000 EUR",
+                                    "delta": 2000}]}) is not None
+
+    match = {"source": "aruodas", "url": "https://www.aruodas.lt/skelbimas/twice-2",
+             "municipality": "Rokiškio rajono", "locality": "Obelių k.",
+             "price_eur": 21200, "house_m2": 95, "plot_ares": 45,
+             "title": "Sodyba su klėtimi ir obelimis", "cadastral_no": None}
+    first = _insert(match, ["lake_shore"], _fingerprint(match), "match", {})
+    assert first is not None, "the promotion must be notified once"
+
+    again = _insert(match, ["lake_shore"], _fingerprint(match), "match", {})
+    assert again is None, "a re-send must not push the same property again"
+
+    with connect() as cx:
+        rows = cx.execute("SELECT * FROM candidate WHERE url IN (?,?)",
+                          (near["url"], match["url"])).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["match_state"] == "match"
