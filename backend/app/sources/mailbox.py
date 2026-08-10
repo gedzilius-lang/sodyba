@@ -12,11 +12,9 @@ Read-only apart from the \\Seen flag. Nothing is deleted.
 """
 from __future__ import annotations
 import email
-import hashlib
 import imaplib
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
 from typing import Any
@@ -24,6 +22,7 @@ from typing import Any
 from ..config import (IMAP_HOST, IMAP_PORT, IMAP_USER, IMAP_PASSWORD,
                       IMAP_FOLDER, IMAP_MAX_PER_RUN, IMAP_MARK_SEEN)
 from ..db import connect, log_refresh
+from ..dedupe import fingerprint as _fingerprint, find_duplicate
 from . import parsers
 
 log = logging.getLogger(__name__)
@@ -64,16 +63,6 @@ def _body(msg: email.message.Message) -> str:
     return best["text/html"] or best["text/plain"] or ""
 
 
-def _fingerprint(listing: dict[str, Any]) -> str:
-    """Stable identity so a re-sent digest does not create duplicates."""
-    if listing.get("url"):
-        base = re.sub(r"[?#].*$", "", listing["url"])
-    else:
-        base = "|".join(str(listing.get(k) or "") for k in
-                        ("source", "municipality", "locality", "price_eur", "house_m2"))
-    return hashlib.sha1(base.encode()).hexdigest()[:16]
-
-
 def _profiles() -> list[dict[str, Any]]:
     from ..db import get_setting
     from ..filters import PRESETS
@@ -107,6 +96,20 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
     nature = listing.get("nature") or {}
     with connect() as cx:
         if cx.execute("SELECT 1 FROM candidate WHERE fingerprint=?", (fp,)).fetchone():
+            return None
+        siblings = [dict(r) for r in cx.execute(
+            "SELECT id,ref,cadastral_no,municipality,price_eur,house_m2,plot_ares,title "
+            "FROM candidate WHERE municipality IS ? OR cadastral_no IS NOT NULL",
+            (listing.get("municipality"),)).fetchall()]
+        twin = find_duplicate(listing, siblings)
+        if twin:
+            # Same property, another portal. Keep the first, record the second URL.
+            if listing.get("url"):
+                cx.execute(
+                    "UPDATE candidate SET notes = COALESCE(notes,'') || ? , "
+                    "updated_at=datetime('now') WHERE id=?",
+                    (f"\n[dublikatas {listing.get('source')}] {listing['url']}",
+                     twin["id"]))
             return None
         ref = _next_ref(cx)
         cx.execute(_INSERT_SQL, (
