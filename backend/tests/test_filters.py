@@ -55,3 +55,47 @@ def test_matches_wrapper_keeps_v1_shape():
     assert ok is True and why == ""
     ok, why = f.matches({**GOOD, "price_eur": 90000}, PROFILE)
     assert ok is False and "kaina" in why
+
+
+NATURE = {**PROFILE, "max_lake_m": 300, "max_river_m": 500, "min_lake_ha": 5}
+
+
+def _with(lake=None, river=None):
+    return {**GOOD, "nature": {"nearest_lake": lake, "nearest_river": river}}
+
+
+def test_missing_river_misses_even_when_lake_is_close():
+    # v1 semantics: no river data rejects regardless of the lake
+    r = f.evaluate(_with(lake={"distance_m": 100, "size": 9}), NATURE)
+    assert [m.field for m in r.misses] == ["max_river_m"]
+
+
+def test_river_too_far_is_forgiven_when_lake_is_within_range():
+    r = f.evaluate(_with(lake={"distance_m": 100, "size": 9},
+                         river={"distance_m": 9000}), NATURE)
+    assert r.misses == []
+
+
+def test_river_too_far_misses_when_lake_is_also_too_far():
+    r = f.evaluate(_with(lake={"distance_m": 5000, "size": 9},
+                         river={"distance_m": 9000}), NATURE)
+    assert {m.field for m in r.misses} == {"max_lake_m", "max_river_m"}
+
+
+def test_lake_below_minimum_size_misses():
+    r = f.evaluate(_with(lake={"distance_m": 100, "size": 2},
+                         river={"distance_m": 100}), NATURE)
+    assert [m.field for m in r.misses] == ["min_lake_ha"]
+
+
+def test_radius_profile_hard_misses_when_the_place_cannot_be_located():
+    # geocode finds nothing against the empty test database
+    p = {**PROFILE, "centres": ["Utena"], "radius_km": 40}
+    r = f.evaluate({**GOOD, "easting": None, "northing": None}, p)
+    m = next(x for x in r.misses if x.field == "radius_km")
+    assert m.kind == f.HARD
+
+
+def test_centres_without_a_radius_are_ignored():
+    p = {**PROFILE, "centres": ["Utena"], "radius_km": None}
+    assert f.evaluate(GOOD, p).misses == []
