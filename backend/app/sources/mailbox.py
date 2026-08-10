@@ -103,13 +103,24 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
             (listing.get("municipality"),)).fetchall()]
         twin = find_duplicate(listing, siblings)
         if twin:
-            # Same property, another portal. Keep the first, record the second URL.
+            # Same property from another route. Keep the first row and record enough
+            # of the second that a wrong merge is visible rather than silent — a
+            # different price or title in this line means the match was wrong.
+            bits = [f"[dublikatas {listing.get('source') or '?'}]"]
+            if listing.get("price_eur") is not None:
+                bits.append(f"{listing['price_eur']:.0f} EUR")
+            if listing.get("house_m2") is not None:
+                bits.append(f"{listing['house_m2']:.0f} m2")
+            if listing.get("plot_ares") is not None:
+                bits.append(f"{listing['plot_ares']:.0f} a")
+            if listing.get("title"):
+                bits.append(listing["title"][:120])
             if listing.get("url"):
-                cx.execute(
-                    "UPDATE candidate SET notes = COALESCE(notes,'') || ? , "
-                    "updated_at=datetime('now') WHERE id=?",
-                    (f"\n[dublikatas {listing.get('source')}] {listing['url']}",
-                     twin["id"]))
+                bits.append(listing["url"])
+            cx.execute(
+                "UPDATE candidate SET notes = COALESCE(notes,'') || ?, "
+                "updated_at=datetime('now') WHERE id=?",
+                ("\n" + " · ".join(bits), twin["id"]))
             return None
         ref = _next_ref(cx)
         cx.execute(_INSERT_SQL, (
