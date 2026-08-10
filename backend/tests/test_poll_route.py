@@ -56,6 +56,17 @@ def test_schema_exposes_every_registry_source_with_its_policy_authority():
     assert by_key["aruodas"]["policy"] == "alert_only"
 
 
+def test_schema_reports_which_robots_verdicts_have_gone_stale():
+    """checked_at exists so a stale crawling permission is visible in the
+    interface, not only in a boot log."""
+    ingest = client.get("/api/schema").json()["ingest"]
+    assert "stale_sources" in ingest
+    assert isinstance(ingest["stale_sources"], list)
+    # every entry must be a real source key
+    keys = {s["key"] for s in ingest["sources"]}
+    assert set(ingest["stale_sources"]) <= keys
+
+
 # ------------------------------------------------------------- poll route
 def _fake_poll_all(result):
     async def fake(fetch=None):

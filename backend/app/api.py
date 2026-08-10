@@ -1,6 +1,7 @@
 """HTTP API. All state changes go through here; the frontend holds nothing."""
 from __future__ import annotations
 import json
+from datetime import date
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -84,6 +85,7 @@ def schema() -> dict[str, Any]:
                  "robots": s.robots, "checked_at": s.checked_at}
                 for s in registry.SOURCES
             ],
+            "stale_sources": registry.stale(date.today().isoformat()),
         },
         "checks": [
             {"key": "ntr_extract", "label": "NTR išrašas", "url": "https://www.registrucentras.lt", "cost": "~5 EUR"},
