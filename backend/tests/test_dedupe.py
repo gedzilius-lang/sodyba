@@ -46,3 +46,48 @@ def test_fingerprint_is_stable_and_ignores_query_strings():
     x = {"url": "https://www.rinka.lt/skelbimas/foo-id-1?utm_source=x"}
     y = {"url": "https://www.rinka.lt/skelbimas/foo-id-1"}
     assert dedupe.fingerprint(x) == dedupe.fingerprint(y)
+
+
+def test_different_villages_are_never_duplicates():
+    # the exact false positive this round exists to close
+    a = {"source": "aruodas", "municipality": "Utenos rajono",
+         "locality": "Kirdeikių k.", "price_eur": 17000, "house_m2": 80,
+         "plot_ares": 40, "title": "Parduodama sodyba Utenos rajone prie ežero",
+         "cadastral_no": None}
+    b = {**a, "source": "rinka", "locality": "Baibių k.", "price_eur": 17300,
+         "house_m2": 82, "plot_ares": 42,
+         "title": "Parduodama sodyba Utenos rajone prie upės"}
+    assert not dedupe.is_duplicate(a, b)
+
+
+def test_district_words_in_the_title_do_not_inflate_similarity():
+    assert dedupe.title_tokens("Sodyba Utenos rajone prie ežero",
+                               "Utenos rajono", "Kirdeikių k.") == {"ežero"}
+
+
+def test_same_property_from_another_portal_still_merges():
+    a = {"source": "aruodas", "municipality": "Utenos rajono",
+         "locality": "Kirdeikių k.", "price_eur": 17000, "house_m2": 80,
+         "plot_ares": 40, "title": "Parduodama sodyba Utenos rajone prie ežero",
+         "cadastral_no": None}
+    b = {**a, "source": "rinka",
+         "title": "Sodyba prie ežero, Utenos r., parduodama"}
+    assert dedupe.is_duplicate(a, b)
+
+
+def test_unusable_titles_merge_only_when_the_village_matches():
+    base = {"municipality": "Utenos rajono", "price_eur": 17000,
+            "house_m2": 80, "plot_ares": 40, "title": "Parduodama sodyba",
+            "cadastral_no": None}
+    same = {**base, "locality": "Kirdeikių k."}
+    assert dedupe.is_duplicate(same, {**same, "source": "rinka"})
+    assert not dedupe.is_duplicate({**base, "locality": None},
+                                   {**base, "locality": None, "source": "rinka"})
+
+
+def test_cadastral_number_still_overrides_a_locality_difference():
+    a = {"municipality": "Utenos rajono", "locality": "Kirdeikių k.",
+         "cadastral_no": "4400/0123:45", "price_eur": 17000, "title": "x"}
+    b = {"municipality": "Kitas rajonas", "locality": "Baibių k.",
+         "cadastral_no": "4400/0123:45", "price_eur": 1, "title": "kitas"}
+    assert dedupe.is_duplicate(a, b)
