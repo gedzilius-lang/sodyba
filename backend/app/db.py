@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS candidate (
     house_m2          REAL,
     plot_ares         REAL,
     auction_ends_at   TEXT,
+    listed_at         TEXT,
+    contact_phone     TEXT,
+    contact_email     TEXT,
     flags_json        TEXT NOT NULL DEFAULT '{}',
     scores_json       TEXT NOT NULL DEFAULT '{}',
     costs_json        TEXT NOT NULL DEFAULT '{}',
@@ -126,6 +129,13 @@ MIGRATIONS = [
      "ALTER TABLE candidate ADD COLUMN match_state TEXT NOT NULL DEFAULT 'match'"),
     ("candidate", "misses_json",
      "ALTER TABLE candidate ADD COLUMN misses_json TEXT NOT NULL DEFAULT '{}'"),
+    ("candidate", "listed_at", "ALTER TABLE candidate ADD COLUMN listed_at TEXT"),
+    # Nullable and never defaulted: an absent contact must read as "the page
+    # did not carry one", never as an empty string that looks like data.
+    # api.update_candidate sets both back to NULL when a candidate is archived
+    # -- see the retention comment there.
+    ("candidate", "contact_phone", "ALTER TABLE candidate ADD COLUMN contact_phone TEXT"),
+    ("candidate", "contact_email", "ALTER TABLE candidate ADD COLUMN contact_email TEXT"),
 ]
 
 

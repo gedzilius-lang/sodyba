@@ -65,6 +65,34 @@ _PUNCT_RUN_RE = re.compile(r"[.,]\s+(?=[.,])")
 _LABEL_MUNI_RE = re.compile(r"Miestas\s*/\s*Rajonas\s*:\s*(.+)")
 _LABEL_LOC_RE = re.compile(r"Mikrorajonas\s*/\s*Gyvenvietė\s*:\s*(.+)")
 
+# The date the advert went online sits in the <div class="infoBlock"> beside
+# the location, each field introduced by a material-icons glyph:
+#     <i ...>&#xE55F;</i> Prienų r. |  <i ...>&#xE878;</i> 2021 07 05 |
+#
+# It MUST be keyed off that structure. The same page carries a second date in
+# the seller panel -- "Nuo 2021 07 05" under the seller's name -- which is when
+# the *member* joined rinka.lt, not when this advert was posted. On the saved
+# Prienai page the two happen to be identical, so a loose date regex looks
+# correct there and silently reports an account's age as an advert's age on
+# every other listing. infoBlock is a structural boundary the seller panel is
+# not inside, so keying on it cannot make that mistake.
+#
+# The div carries no nested <div>, on either of the page's two infoBlocks (the
+# listing header and the gallery modal), so the non-greedy cut at </div> takes
+# the whole block and nothing after it.
+_INFO_BLOCK_RE = re.compile(
+    r'(?is)<div[^>]*\bclass="[^"]*\binfoBlock\b[^"]*"[^>]*>(.*?)</div>')
+_INFO_DATE_RE = re.compile(r"\b(\d{4})[ ./-](\d{1,2})[ ./-](\d{1,2})\b")
+
+# Contact details. The page shows the phone truncated behind a "rodyti visą"
+# reveal, but the full number is in the markup four times over: the reveal
+# button's own data-number attribute and the mobile tel:/sms: links. Those are
+# the site's own structured value, so they are read first and the flattened
+# description text ("teirautis tel.867132403") is only the fallback -- the same
+# labelled-field-before-free-text precedence the location fields use above.
+_DATA_NUMBER_RE = re.compile(r'(?i)data-number="([^"]+)"')
+_TEL_HREF_RE = re.compile(r'(?i)href="(?:tel|sms):([^"]+)"')
+
 
 def _label_value(m: re.Match | None) -> str | None:
     """The text captured after a labelled field, or None for absent/'-'.
@@ -130,8 +158,58 @@ def _content(html: str, current_id: int | None) -> str:
     return slice_
 
 
+def _listed_at(content_html: str) -> str | None:
+    """The date this advert went online, ISO `YYYY-MM-DD`, or None.
+
+    Read from the infoBlock only (see _INFO_BLOCK_RE) so the seller's "Nuo
+    <date>" member-since line can never be mistaken for it. The page writes
+    "2021 07 05"; the stored form is "2021-07-05". A block whose date is not a
+    plausible calendar date is skipped rather than reformatted into a lie.
+    """
+    for block in _INFO_BLOCK_RE.finditer(content_html or ""):
+        m = _INFO_DATE_RE.search(parsers.to_text(block.group(1)))
+        if not m:
+            continue
+        year, month, day = (int(g) for g in m.groups())
+        if not (1990 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31):
+            continue
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    return None
+
+
+def _contacts(content_html: str, body: str) -> tuple[str | None, str | None]:
+    """(phone, email) for this listing, canonical, or None where absent.
+
+    Both are read from the CONTENT SLICE, not the whole document, for the same
+    reason locality is (see _content): a page can carry links and panels
+    belonging to other adverts, and attaching a stranger's phone number to this
+    property would be worse than having none. Bounding it here also keeps the
+    page's Google Analytics id ("UA-128041834-1", in a <script> above the
+    heading) out of reach.
+
+    No email appeared on any of the 23 live listings measured 2026-08-10; the
+    seller panel shows only a "confirmed email" badge with no address. So None
+    is the expected answer, and there is deliberately no fallback that would
+    manufacture one. Addresses at rinka.lt's own domain are dropped: the
+    portal's support address is not the seller's.
+    """
+    html_ = content_html or ""
+    structured = _DATA_NUMBER_RE.findall(html_) + _TEL_HREF_RE.findall(html_)
+    phone = next((p for p in (parsers.normalise_phone(v) for v in structured) if p), None)
+    if phone is None:
+        found = parsers.phones_in(body)
+        phone = found[0] if found else None
+
+    host = BASE.split("//", 1)[-1].removeprefix("www.")
+    email = next((e for e in parsers.emails_in(body)
+                  if (dom := e.rsplit("@", 1)[-1]) != host
+                  and not dom.endswith("." + host)), None)
+    return phone, email
+
+
 def parse_detail(html: str, url: str) -> dict[str, Any]:
-    body = parsers.to_text(_content(html, _listing_id(url)))
+    content = _content(html, _listing_id(url))
+    body = parsers.to_text(content)
     d = parsers._common(body)
 
     h1 = _H1_RE.search(html or "")
@@ -166,6 +244,9 @@ def parse_detail(html: str, url: str) -> dict[str, Any]:
     label_loc = _label_value(_LABEL_LOC_RE.search(body))
     if label_loc is not None:
         d["locality"] = label_loc
+
+    d["listed_at"] = _listed_at(content)
+    d["contact_phone"], d["contact_email"] = _contacts(content, body)
 
     d["source"] = KEY
     d["url"] = url

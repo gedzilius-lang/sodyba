@@ -74,16 +74,19 @@ def _next_ref(cx) -> str:
     return f"K{n + 1:03d}"
 
 
-# Column list and parameter tuple must stay in lockstep — 20 bound parameters
-# against 20 `?` placeholders, with flags/scores/checks defaulted inline and
-# `archived` fixed at 0. Count both sides if you touch this.
+# Column list and parameter tuple must stay in lockstep — 23 bound parameters
+# against 23 `?` placeholders, over 27 columns, with flags/scores/checks
+# defaulted inline and `archived` fixed at 0. Count both sides if you touch
+# this. (Was 20/20 over 24 columns before listed_at, contact_phone and
+# contact_email were added.)
 _INSERT_SQL = (
     "INSERT INTO candidate("
     "ref,source,url,title,municipality,locality,cadastral_no,price_eur,house_m2,"
-    "plot_ares,auction_ends_at,flags_json,scores_json,costs_json,checks_json,"
+    "plot_ares,auction_ends_at,listed_at,contact_phone,contact_email,"
+    "flags_json,scores_json,costs_json,checks_json,"
     "notes,fingerprint,profiles_json,easting,northing,nature_json,"
     "match_state,misses_json,archived) "
-    "VALUES(?,?,?,?,?,?,?,?,?,?,?,'{}','{}',?,'{}',?,?,?,?,?,?,?,?,0)"
+    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}','{}',?,'{}',?,?,?,?,?,?,?,?,0)"
 )
 
 
@@ -203,6 +206,9 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
             listing.get("house_m2"),
             listing.get("plot_ares"),
             listing.get("auction_ends_at"),
+            listing.get("listed_at"),
+            listing.get("contact_phone"),
+            listing.get("contact_email"),
             json.dumps(costs),
             (listing.get("raw") or "")[:4000],
             fp,

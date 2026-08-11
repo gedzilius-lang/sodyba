@@ -316,3 +316,92 @@ def test_municipality_from_label_rejects_an_unrecognised_value():
 @pytest.mark.parametrize("value", ["-", "", None])
 def test_municipality_from_label_treats_dash_and_empty_as_absent(value):
     assert parsers.municipality_from_label(value) is None
+
+
+# ------------------------------------------------------------------ contacts
+# The whole point of normalising: Lithuania's national trunk prefix "8" stands
+# in for the "+370" country code, so one seller's one phone gets written at
+# least four ways across a page (data-number, tel:, sms:, free text). Stored
+# unnormalised, one seller looks like several.
+
+ONE_NUMBER = [
+    "+37067132403",          # the tel:/sms: and data-number form
+    "+370 671 32403",        # the same with the usual grouping
+    "867132403",             # trunk form, as the description writes it
+    "8 671 32403",           # trunk form, grouped
+    "8-671-32403",           # trunk form, hyphenated
+    "(8-671) 32403",         # trunk form, bracketed
+    "0037067132403",         # international dialling prefix
+    "67132403",              # the bare national number
+]
+
+
+@pytest.mark.parametrize("spelling", ONE_NUMBER)
+def test_every_spelling_of_one_number_normalises_to_the_same_value(spelling):
+    assert parsers.normalise_phone(spelling) == "+37067132403"
+
+
+def test_the_spellings_really_do_collapse_to_a_single_stored_value():
+    # The property that matters, stated directly rather than inferred from the
+    # parametrised cases above: the set has one element.
+    assert len({parsers.normalise_phone(s) for s in ONE_NUMBER}) == 1
+
+
+@pytest.mark.parametrize("junk", [
+    None, "", "-", "labas",
+    "128041834-1",       # the Google Analytics id on the live listing page
+    "8041834-1",         # the tail of that same id
+    "6000,00",           # a price
+    "2021 07 05",        # the listing date
+    "880012345",         # freephone 800 range: not a seller's number
+    "870012345",         # service 700 range: likewise
+    "8671324",           # too short
+    "86713240312",       # too long
+])
+def test_things_that_are_not_phone_numbers_come_back_none(junk):
+    assert parsers.normalise_phone(junk) is None
+
+
+def test_phones_in_finds_the_number_inside_running_text():
+    text = "dėl sodybos apžiūros teirautis tel.867132403. Kaina sutartine"
+    assert parsers.phones_in(text) == ["+37067132403"]
+
+
+def test_phones_in_reports_one_number_once_however_often_it_is_spelled():
+    text = "Skambinti +37067132403 arba 8 671 32403, sms 867132403"
+    assert parsers.phones_in(text) == ["+37067132403"]
+
+
+def test_phones_in_ignores_the_analytics_id_and_the_price():
+    assert parsers.phones_in("UA-128041834-1 Kaina: 6000,00 EUR, 2021 07 05") == []
+
+
+def test_phones_in_does_not_stitch_digits_across_a_line_break():
+    # Separators exclude the newline on purpose: "8" ending one line and eight
+    # digits starting the next are not a phone number.
+    assert parsers.phones_in("kaina 8\n671 32403 EUR") == []
+
+
+def test_emails_in_finds_nothing_when_there_is_nothing_to_find():
+    assert parsers.emails_in("Vartotojas patvirtinęs savo elektroninį paštą") == []
+
+
+def test_emails_in_lowercases_and_deduplicates():
+    assert parsers.emails_in("Rasykite Vardas@Gmail.com arba vardas@gmail.com.") == \
+        ["vardas@gmail.com"]
+
+
+def test_the_leading_zero_trunk_form_real_sellers_type_is_accepted():
+    """Lithuania's trunk prefix is 8, not the 0 most of Europe uses, but one of
+    the 35 live listings collected 2026-08-10 publishes "061154699" in the
+    portal's own contact widget. Structured contact fields are taken at their
+    word; free text is not (see the test below)."""
+    assert parsers.normalise_phone("061154699") == "+37061154699"
+    assert parsers.normalise_phone("0 611 54699") == "+37061154699"
+
+
+def test_the_free_text_scanner_does_not_guess_at_a_bare_leading_zero():
+    # In running prose a nine-digit run starting 0 is a guess, and a guessed
+    # phone number gets dialled. PHONE_RE requires +370, 00370 or 8.
+    assert parsers.phones_in("kodas 061154699 sklypui") == []
+    assert parsers.phones_in("skambinti 861154699") == ["+37061154699"]

@@ -1,4 +1,5 @@
 import pathlib
+import re
 
 import pytest
 
@@ -12,6 +13,25 @@ DETAIL_WITH_SELLER_ADS = (FIX / "rinka_detail_with_seller_ads.html").read_text(e
 DETAIL_LABELLED = (FIX / "rinka_detail_labelled_fields.html").read_text(encoding="utf-8")
 URL = "https://www.rinka.lt/skelbimas/parduodama-sodyba-id-5076782"
 SELLER_ADS_URL = "https://www.rinka.lt/skelbimas/x-id-4941439"
+
+# rinka_detail_live.html is a REAL rinka.lt listing page, saved 2026-08-10 and
+# copied here verbatim with ONE deliberate change: the seller's phone number
+# was replaced, consistently across all eight places the page spells it (5x
+# "+37067132403" in data-number/tel:/sms:, 3x "867132403" in the meta tags and
+# the description), with "+37061234567"/"861234567". Same length, same
+# spellings, same positions — so every structural property under test here is
+# exactly the live page's. (Line endings are normalised to LF, which changed
+# three bytes and nothing else; parsers.to_text splits on lines either way.)
+# The digits were changed because a private individual's contact number does
+# not belong in git history, which is the one store the retention rule in
+# api.update_candidate cannot reach.
+#
+# Everything else is untouched, and that is the point: an earlier hand-written
+# fixture in this project put a listing's description in an order the real page
+# never uses, every test passed, and the parser returned nothing useful on live
+# data. Assertions below are the values the live page actually produces.
+LIVE = (FIX / "rinka_detail_live.html").read_text(encoding="utf-8")
+LIVE_URL = "https://www.rinka.lt/skelbimas/sodyba-prienu-r-id-4936280"
 
 
 def _labelled_detail_html(muni_value: str, locality_value: str = "Plateliai") -> str:
@@ -252,3 +272,109 @@ def test_parse_detail_falls_back_to_the_heading_when_labels_are_absent():
     # keep resolving municipality from the heading, exactly as before.
     assert rinka.parse_detail(DETAIL, URL)["municipality"] == "Alytaus rajono"
     assert rinka.parse_detail(DETAIL_DESC_FIRST, URL)["municipality"] == "Kauno rajono"
+
+
+# --------------------------------------------------------- the real live page
+# Everything below runs against rinka_detail_live.html, the saved real listing
+# (see the LIVE comment at the top of this module), not a constructed one.
+
+def test_live_page_still_parses_the_fields_the_adapter_already_had():
+    # Guard rail for the fixture itself: if a future edit breaks these, the
+    # date/contact assertions below are being made against a page that no
+    # longer resembles the one that was saved.
+    d = rinka.parse_detail(LIVE, LIVE_URL)
+    assert d["price_eur"] == 6000.0
+    assert d["plot_ares"] == 118.0
+    assert d["municipality"] == "Prienų rajono"
+    assert d["title"] == "Sodyba prienu r."
+
+
+def test_live_page_listed_at_comes_from_the_info_block():
+    # The page writes "2021 07 05" beside the location; stored as ISO.
+    assert rinka.parse_detail(LIVE, LIVE_URL)["listed_at"] == "2021-07-05"
+
+
+def test_the_sellers_member_since_date_is_not_mistaken_for_the_listing_date():
+    """The trap this extraction exists to avoid.
+
+    The saved page carries "Nuo 2021 07 05" under the seller's name — when the
+    MEMBER joined rinka.lt — and on this particular page it coincides exactly
+    with the date the advert went online, so a bare date regex looks correct.
+    Move the member-since date and the two facts separate: listed_at must still
+    be the infoBlock's date, and must not have drifted to the seller panel's.
+    """
+    moved = LIVE.replace("Nuo 2021 07 05", "Nuo 2019 03 11")
+    assert "Nuo 2019 03 11" in moved                      # the edit landed
+    d = rinka.parse_detail(moved, LIVE_URL)
+    assert d["listed_at"] == "2021-07-05"
+    assert d["listed_at"] != "2019-03-11"
+
+
+def test_no_info_block_date_yields_none_not_the_member_since_date():
+    """The other half of the same trap: with the infoBlock date gone, a loose
+    date scan would happily return the seller's member-since date instead.
+    None is the honest answer."""
+    moved = LIVE.replace("Nuo 2021 07 05", "Nuo 2019 03 11")
+    stripped = re.sub(r"(&#xE878;</i>)\s*2021 07 05", r"\1", moved)
+    assert "2021 07 05" not in stripped
+    assert "Nuo 2019 03 11" in stripped                   # still on the page
+    assert rinka.parse_detail(stripped, LIVE_URL)["listed_at"] is None
+
+
+def test_live_page_phone_is_extracted_in_full_despite_the_reveal_button():
+    # The UI shows "+3706... rodyti visą" — truncated behind a reveal — but the
+    # full number is in the markup, and that is what gets stored.
+    d = rinka.parse_detail(LIVE, LIVE_URL)
+    assert d["contact_phone"] == "+37061234567"
+    assert "..." not in d["contact_phone"]
+
+
+def test_live_page_phone_is_still_found_when_only_the_description_carries_it():
+    # Strip every structured carrier (the reveal button's data-number and the
+    # mobile tel:/sms: links) and the description's "teirautis tel.861234567"
+    # is the fallback — the same number, same canonical form.
+    no_widgets = (LIVE.replace('data-number="+37061234567"', 'data-number=""')
+                      .replace('href="tel:+37061234567"', 'href="tel:"')
+                      .replace('href="sms:+37061234567"', 'href="sms:"'))
+    assert "+37061234567" not in no_widgets
+    assert rinka.parse_detail(no_widgets, LIVE_URL)["contact_phone"] == "+37061234567"
+
+
+def test_live_page_has_no_email_and_none_is_invented():
+    # No email appears on any of the 23 live listings measured 2026-08-10 —
+    # the seller panel shows only a "confirmed email" badge. None, not "".
+    d = rinka.parse_detail(LIVE, LIVE_URL)
+    assert d["contact_email"] is None
+
+
+def test_an_email_on_the_page_is_extracted_when_one_is_actually_there():
+    with_mail = LIVE.replace("Kaina sutartine",
+                             "Kaina sutartine. Rasykite Vardas.Pavarde@gmail.com")
+    assert rinka.parse_detail(with_mail, LIVE_URL)["contact_email"] == "vardas.pavarde@gmail.com"
+
+
+def test_the_portals_own_support_address_is_not_taken_as_the_sellers():
+    with_mail = LIVE.replace("Kaina sutartine", "Kaina sutartine. info@rinka.lt")
+    assert rinka.parse_detail(with_mail, LIVE_URL)["contact_email"] is None
+
+
+def test_the_pages_analytics_id_is_not_read_as_a_phone_number():
+    """The live page carries "UA-128041834-1" in a Google Analytics <script>.
+    A bare "8 followed by eight digits" pattern matches inside it. Two things
+    stop it: the content slice starts at <h1>, below the script, and the
+    national-number leading-digit rule rejects it anyway."""
+    from backend.app.sources import parsers
+    assert "UA-128041834-1" in LIVE
+    assert parsers.phones_in("UA-128041834-1") == []
+    planted = LIVE.replace("Kaina sutartine", "Kaina sutartine UA-128041834-1")
+    assert rinka.parse_detail(planted, LIVE_URL)["contact_phone"] == "+37061234567"
+
+
+def test_a_page_without_contacts_or_a_date_returns_none_for_all_three():
+    html = ('<html><body><h1>Parduodama sodyba Ignalinos r.</h1>'
+            '<div class="description">Sklypas 30 arų.</div>'
+            '<span class="price">Kaina: 17000,00 &euro;</span></body></html>')
+    d = rinka.parse_detail(html, URL)
+    assert d["listed_at"] is None
+    assert d["contact_phone"] is None
+    assert d["contact_email"] is None

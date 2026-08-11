@@ -55,6 +55,95 @@ LOCALITY_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+(?:i�
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
 
+# ------------------------------------------------------------------ contacts
+# One number, four spellings. Lithuania's national trunk prefix "8" stands in
+# for the "+370" country code, so the same seller writes "+37067132403",
+# "867132403", "8 671 32403" or "(8-671) 32403" and means one phone. Storing
+# whatever the page happened to print would make one seller look like several
+# and defeat any comparison, so everything extracted goes through
+# normalise_phone() first -- see its docstring for the canonical shape.
+#
+# The national significant number is always 8 digits and begins 3-6 (3xx/4xx/5
+# geographic, 6xx mobile). That leading-digit rule is load-bearing: a pattern
+# that accepts "8 followed by eight digits" also accepts the Google Analytics
+# property id this very page carries ("UA-128041834-1") and any eight-digit
+# price. Separators deliberately exclude the newline, so a run of digits at the
+# end of one line cannot be stitched onto the start of the next.
+_PHONE_SEP = r"[ \t\u00a0()\-]*"
+PHONE_RE = re.compile(
+    r"(?<![\w+])(?:(?:\+|00)[ \t]?370|8)" + _PHONE_SEP
+    + r"(?:[3-6](?:" + _PHONE_SEP + r"\d){7})(?!\d)", re.U)
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+
+def normalise_phone(raw: str | None) -> str | None:
+    """A Lithuanian phone number in one canonical shape, or None.
+
+    CANONICAL SHAPE: E.164 -- a literal "+370" followed by the 8-digit
+    national number, e.g. "+37067132403". No spaces, no brackets, no trunk
+    prefix. Chosen because it is the only spelling that is unambiguous
+    internationally, is what `tel:` links already carry, and sorts and
+    compares as a plain string.
+
+    Accepted inputs, decided by digit count so the rules cannot overlap:
+      8 digits              the national number already ("67132403")
+      9 digits starting 8   national trunk form ("867132403", "8 671 32403")
+      9 digits starting 0   the same with the wrong trunk digit ("061154699")
+      11 digits starting 370  ("+37067132403", "370 671 32403")
+      13 digits starting 00370  ("0037067132403")
+    Separators of any kind are stripped before counting, so "(8-671) 32403"
+    and "8 671 32403" reach the same eight digits.
+
+    The leading-0 form is not correct Lithuanian dialling -- the trunk prefix
+    here is 8, not the 0 most of Europe uses -- but sellers type it anyway: one
+    of the 35 live listings collected 2026-08-10 publishes "061154699" in the
+    portal's own contact widget. It is accepted because this function is only
+    ever handed a string the caller already has reason to believe is a phone
+    number (a `tel:` href, a data-number attribute, or a PHONE_RE match). The
+    free-text scanner PHONE_RE deliberately does NOT accept a bare leading 0:
+    in running prose that is a guess, and a guessed phone number gets dialled.
+
+    Anything else -- wrong length, or a national number that does not begin
+    3-6 (service and freephone ranges 70x/80x/90x are not seller numbers) --
+    comes back None. A number we cannot recognise is not stored in a mangled
+    form: None is the honest answer, exactly as in municipality_from().
+    """
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) == 13 and digits.startswith("00370"):
+        digits = digits[5:]
+    elif len(digits) == 11 and digits.startswith("370"):
+        digits = digits[3:]
+    elif len(digits) == 9 and digits[0] in "80":
+        digits = digits[1:]
+    if len(digits) != 8 or digits[0] not in "3456":
+        return None
+    return "+370" + digits
+
+
+def phones_in(text: str) -> list[str]:
+    """Every recognisable Lithuanian phone number in `text`, canonical and
+    deduplicated, in the order they appear."""
+    out: list[str] = []
+    for m in PHONE_RE.finditer(text or ""):
+        n = normalise_phone(m.group(0))
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def emails_in(text: str) -> list[str]:
+    """Every email address in `text`, lowercased and deduplicated, in order.
+
+    No fallback and no guessing: a page without an address yields an empty
+    list, and the caller stores None. An invented address would be sent mail.
+    """
+    out: list[str] = []
+    for m in EMAIL_RE.finditer(text or ""):
+        e = m.group(0).lower().rstrip(".")
+        if e not in out:
+            out.append(e)
+    return out
+
 
 def to_text(body: str) -> str:
     """Flatten an HTML or plaintext email body into scannable text."""
