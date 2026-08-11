@@ -231,6 +231,7 @@ backend/app/
     parsers.py        per-portal alert email extraction               PURE
     mailbox.py        IMAP poller, dedupe/insert for every path
     poller.py         the polling ingest path, per-source watermark
+    backfill.py       refill details on rows already stored; run by hand
     adapters/         one module per polled site (rinka.py)           PURE
 frontend/
   index.html  styles.css  app.js      no framework, no build step
