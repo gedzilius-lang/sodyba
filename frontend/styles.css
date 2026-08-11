@@ -361,6 +361,10 @@ tr.is-archived{opacity:.42}
 .testrow b{min-width:150px}
 .testrow.ok{color:var(--lichen)}
 .testrow.no{color:var(--paper-dim)}
+/* An unresolved profile centre reads in the same red as a hard finding: it
+   silently narrows the search area, so it must not look like a note. */
+.centres-out{margin:-4px 0 12px}
+.centres-out b{color:var(--oxide)}
 
 /* ------------------------------------------------------- nature + advice */
 /* Wraps too, for the same reason: nowrap made GAMTA a 305px column, a quarter

@@ -66,3 +66,64 @@ def test_the_four_profiles_remain_geographically_distinct():
     # separate profiles at all.
     as_sets = [frozenset(munis) for munis in LISTS.values()]
     assert len(set(as_sets)) > 1
+
+
+# --------------------------------------------------------- radius geography
+# `zemaitija_lakes` is the first preset to locate itself with centres and a
+# radius instead of a municipality list, so these guard the second way of
+# writing geography rather than the first.
+
+def test_every_preset_carries_the_full_field_set():
+    # Presets are read straight out of code by api.profiles() when nothing has
+    # been saved yet, so a preset missing a key is not merely untidy: every
+    # reader would fall through to .get(...) -> None and the gate it names
+    # would quietly stop existing. Sixth preset added by hand; pin the shape.
+    expected = set(f.FIELDS)
+    for preset in f.PRESETS:
+        assert set(preset) == expected, (
+            f"preset {preset['key']!r} field set differs: "
+            f"missing {sorted(expected - set(preset))}, "
+            f"extra {sorted(set(preset) - expected)}")
+
+
+def test_preset_keys_are_unique():
+    keys = [p["key"] for p in f.PRESETS]
+    assert len(keys) == len(set(keys))
+
+
+def test_a_preset_with_centres_also_sets_a_radius():
+    # filters._radius_misses returns nothing at all when either half is
+    # missing, so centres without a radius is a geography that silently does
+    # not apply — exactly the failure this suite exists to catch.
+    for preset in f.PRESETS:
+        if preset["centres"]:
+            assert preset["radius_km"], (
+                f"preset {preset['key']!r} lists centres but no radius_km")
+
+
+def test_the_zemaitija_preset_locates_by_radius_alone():
+    p = next(x for x in f.PRESETS if x["key"] == "zemaitija_lakes")
+    assert p["centres"] == f.ZEMAITIJA_LAKES
+    assert p["municipalities"] == [], (
+        "the interest is the lakes and the country round them, not a district")
+    assert p["enabled"] is True
+
+
+def test_the_zemaitija_radius_closes_the_widest_gap_in_the_chain():
+    # The five anchors form a chain and a listing is measured to the NEAREST
+    # centre, so the circles union into a corridor only if the radius covers
+    # half the widest adjacent gap: Lūkstas to Rietavas is 25 km, so anything
+    # under 12.5 leaves a hole in the middle of the search area.
+    p = next(x for x in f.PRESETS if x["key"] == "zemaitija_lakes")
+    assert p["radius_km"] >= 12.5
+
+
+def test_the_zemaitija_preset_gates_on_place_not_on_specification():
+    # Permissive on what, strict on where. A water gate in particular would
+    # hard-miss every row whose nature has not been measured yet.
+    p = next(x for x in f.PRESETS if x["key"] == "zemaitija_lakes")
+    assert p["max_lake_m"] is None and p["max_river_m"] is None
+    assert p["min_lake_ha"] is None
+    assert p["require_any"] == [] and p["require_all"] == []
+    assert p["min_plot_ares"] == 0
+    assert 3000 <= p["min_price"] and p["max_price"] <= 25000

@@ -483,6 +483,38 @@ function loadProfileEditor() {
   $('epLake').value = p.max_lake_m ?? '';
   $('epRiver').value = p.max_river_m ?? '';
   $('epLakeHa').value = p.min_lake_ha ?? '';
+  renderCentreResolution();
+}
+
+/* Read the centres back as the gazetteer understood them. Two failures hide
+   here and only one of them is caught elsewhere: a centre that resolves to
+   nothing becomes a hard miss at evaluation time (filters._radius_misses), but
+   a centre that resolves to the WRONG place looks exactly like a correct one —
+   "Varniai" resolves to Varnionių k. in Radviliškio rajono, 150 km from the
+   Varniai anyone means, and the profile would search there without a word.
+   The centres box is one comma-separated line, so a municipality cannot be
+   typed per centre; echoing the answer is the cheapest thing that makes a
+   wrong one visible. */
+async function renderCentreResolution() {
+  const box = $('epCentresOut');
+  const centres = csv($('epCentres').value);
+  if (!centres.length) { box.textContent = ''; return; }
+  let r;
+  try {
+    r = await api('/centres/resolve', {
+      method: 'POST', body: JSON.stringify({ centres }),
+    });
+  } catch (e) {
+    box.textContent = `Centrų patikrinti nepavyko: ${e.message}`;
+    return;
+  }
+  box.innerHTML = r.centres.map((c) => {
+    const d = c.resolved;
+    if (!d) return `<b>${esc(c.centre)} → nerasta</b>`;
+    const ha = d.size_ha ? ` ${Math.round(d.size_ha)} ha` : '';
+    const where = d.kind === 'lake' ? `ežeras${ha}` : (d.municipality || '');
+    return `${esc(c.centre)} → ${esc(d.name)}${where ? ` (${esc(where)})` : ''}`;
+  }).join(' · ');
 }
 
 const csv = (v) => v.split(',').map((x) => x.trim()).filter(Boolean);
@@ -956,6 +988,7 @@ function wire() {
   $('btnSaveProfile').onclick = () => saveProfileEditor().catch((e) => toast(e.message, true));
   $('btnTestProfile').onclick = () => testProfile().catch((e) => toast(e.message, true));
   $('epPick').onchange = loadProfileEditor;
+  $('epCentres').onchange = () => renderCentreResolution();
   $('btnResetProfiles').onclick = async () => {
     if (!confirm('Grąžinti numatytuosius profilius? Tavo pakeitimai bus prarasti.')) return;
     PROFILES = (await api('/profiles/reset', { method: 'POST' })).profiles;

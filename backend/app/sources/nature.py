@@ -250,6 +250,52 @@ def geocode(name: str | None, municipality: str | None = None) -> dict[str, Any]
     return None
 
 
+def resolve_centre(name: str | None) -> dict[str, Any] | None:
+    """A *search centre*: a settlement if the name is one, otherwise a lake.
+
+    geocode() above stays settlement-only on purpose, and this is deliberately
+    a second function rather than a flag on it. A listing's `locality` is
+    always a settlement; letting that fall back to water would place a
+    homestead in the middle of a lake and measure every distance it owns from
+    there. A profile *centre* is the opposite kind of name — it says which
+    pocket of country to search, and some pockets have no settlement of their
+    own. Lūkstas (1001 ha, Varnių regional park) is one: villages are
+    scattered round it, the gazetteer holds no "Lūkstas", and naming it as a
+    centre resolved to nothing at all.
+
+    Settlements win on purpose where a name is both. "Plateliai" is a village
+    and, as "Platelių ežeras", the lake beside it; an operator naming
+    Plateliai means the village, which is where the roads and the listings
+    are.
+
+    Lakes and reservoirs only — never rivers, though `water_feature` holds
+    both. A river is stored as one point taken off a line up to 476 km long,
+    so those coordinates are not a place, and a radius drawn round them would
+    sit somewhere nobody asked for. A river name therefore stays unresolved,
+    and unresolved is loud (filters._radius_misses turns it into a HARD miss)
+    rather than quietly wrong.
+
+    Returns the mapping geocode returns, plus `kind`, so callers that only
+    want easting/northing consume either without knowing which they got.
+    """
+    place = geocode(name)
+    if place:
+        return {**place, "kind": "place"}
+    if not name or not name.strip():
+        return None
+    for stem in _stems(name):
+        with connect() as cx:
+            row = cx.execute(
+                "SELECT name, easting, northing, size FROM water_feature "
+                "WHERE kind='lake' AND name LIKE ? ORDER BY size DESC LIMIT 1",
+                [f"{stem}%"]).fetchone()
+        if row:
+            # Largest first: the stem of "Lūkstas" must land on the 1001 ha
+            # lake, not on whatever small pond shares its opening letters.
+            return {**dict(row), "kind": "lake", "municipality": None}
+    return None
+
+
 def nearest_water(easting: float, northing: float,
                   kind: str, min_size: float = 0.0) -> dict[str, Any] | None:
     """Nearest lake or river, searching outward in 10 km rings."""

@@ -15,7 +15,7 @@ from .scoring import CRITERIA, HARD_FLAGS, COST_LINES, DEFAULT_SETTINGS, evaluat
 from .filters import PRESETS, sanitise, match_all, matches, evaluate_all, MATCH, NEAR
 from .sources import (refresh_market_stock, poll_mailbox, mailbox_configured,
                       refresh_water, refresh_places, refresh_protected, geocode,
-                      poll_all, POLLED, registry)
+                      resolve_centre, poll_all, POLLED, registry)
 from . import notify
 
 router = APIRouter(prefix="/api")
@@ -759,6 +759,48 @@ def geocode_one(body: GeocodeIn) -> dict[str, Any]:
     if not p:
         raise HTTPException(404, f"vietovė nerasta: {body.name}")
     return p
+
+
+class CentresIn(BaseModel):
+    centres: list[str] = Field(default_factory=list)
+
+
+@router.post("/centres/resolve")
+def resolve_profile_centres(body: CentresIn) -> dict[str, Any]:
+    """Say out loud what each profile centre resolves to, before it is saved.
+
+    A centre that resolves to nothing is caught downstream — filters
+    ._radius_misses turns it into a hard miss so the profile cannot quietly
+    search a smaller area than it names. A centre that resolves to the *wrong*
+    place cannot be caught that way, because nothing about it looks wrong:
+    geocode("Varniai") returns Varnionių k. in Radviliškio rajono, 150 km from
+    the Varniai anybody means, and a radius drawn there would search the wrong
+    end of the country while the profile still read "Varniai". The centres box
+    is one comma-separated line, so a per-centre municipality cannot be typed
+    into it — the cheapest thing that helps is to echo the resolution back
+    beside the box and let the operator read it. This route is that echo; it
+    does not refuse anything.
+
+    Returns null rather than 404 for an unresolved name: the whole point is to
+    report on several centres at once, including the bad ones.
+    """
+    out = []
+    for raw in body.centres:
+        name = str(raw).strip()
+        if not name:
+            continue
+        r = resolve_centre(name)
+        out.append({
+            "centre": name,
+            "resolved": None if not r else {
+                "name": r["name"],
+                "kind": r.get("kind"),
+                "municipality": r.get("municipality"),
+                "size_ha": r.get("size") if r.get("kind") == "lake"
+                else r.get("area_ha"),
+            },
+        })
+    return {"centres": out}
 
 
 @router.post("/layers/refresh")

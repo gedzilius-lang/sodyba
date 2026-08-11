@@ -131,6 +131,25 @@ CHEAPEST = [
     "Skuodo rajono", "Šilalės rajono", "Jurbarko rajono",
 ]
 
+# One corner of Žemaitija, named by the operator as places rather than as
+# districts — and the difference matters, so this list is centres, not
+# municipalities. The five anchors form a chain: Lūkstas is 25 km from
+# Rietavas, Rietavas 21 km from Plungė, Plungė 15 km from Plateliai, and
+# Plateliai 3 km from its own lake. That chain crosses Rietavo, Plungės,
+# Telšių and Varnių ground; a municipality list would either cut the country
+# between the anchors in half or drag in four whole districts nobody asked
+# about. `radius_km` does the work alone, and because a listing is measured to
+# the NEAREST centre the five circles union into a corridor rather than
+# intersecting into nothing.
+#
+# Lūkstas is why resolve_centre exists at all: 1001 ha of water with no
+# settlement of its own name, so the gazetteer alone could not place it and
+# the profile would have searched four circles while claiming five.
+# "Plateliai" resolves to the village and "Platelių ežeras" to the lake 3 km
+# away — both are kept, because the village is where the roads are and the
+# lake is what the operator is actually looking at.
+ZEMAITIJA_LAKES = ["Rietavas", "Plungė", "Plateliai", "Platelių ežeras", "Lūkstas"]
+
 WATER_WORDS = ["ežer", "upė", "upel", "prie vandens", "pakrant", "tvenkin", "kranto"]
 FOREST_WORDS = ["mišk", "giri", "vienkiem", "sodyb"]
 UTILITY_WORDS = ["elektra", "gręžin", "šulin", "vandentiek"]
@@ -218,10 +237,47 @@ PRESETS: list[dict[str, Any]] = [
         "centres": [], "radius_km": None,
         "max_lake_m": None, "max_river_m": None, "min_lake_ha": None,
     },
+    {
+        "key": "zemaitija_lakes",
+        "name": "Žemaitijos ežerų kampas",
+        "note": "Rietavas, Plungė, Plateliai, Platelių ir Lūksto ežerai. Svarbu "
+                "vieta, ne pastatas — 15 km spinduliu apie penkis centrus.",
+        "enabled": True,
+        "min_price": 3000, "max_price": 25000,
+        # Permissive on what, strict on where. 30 m2 keeps sheds out and
+        # nothing else: it is below every floor area actually stored (the
+        # smallest is 40 m2), and it gates nothing at all on the 21 of 35 rows
+        # that carry no floor area, because evaluate() skips the check outright
+        # when house_m2 is None — neither a hard nor a soft miss. No plot floor
+        # at all: one of the two rows this profile matches today is a cottage
+        # outside Rietavas whose plot reaches storage as 0.07 a, and any floor
+        # above zero would drop it on a parsing artefact rather than on merit.
+        "min_plot_ares": 0, "min_house_m2": 30,
+        # Empty on purpose — see ZEMAITIJA_LAKES. Location is the radius's job.
+        "municipalities": [],
+        "require_any": [],
+        "require_all": [],
+        "exclude_any": JUNK_WORDS,
+        "sources": [],
+        # 15 km: half the widest gap in the chain (Lūkstas-Rietavas, 25 km) is
+        # 12.5, so 15 closes every gap with a little margin and the circles
+        # join into one corridor instead of five islands. It is chosen from
+        # those distances, not from the result — the nearest row it turns down
+        # sits 22.7 km out in Telšių rajono, and reaching it would mean a
+        # radius wide enough to swallow Telšiai, which is a different search.
+        "centres": ZEMAITIJA_LAKES, "radius_km": 15,
+        # No water gate. The lakes are already in the centres, and a distance
+        # gate here would hard-miss every row whose nature is not yet measured
+        # (see _nature_misses) — a location profile must not depend on that.
+        "max_lake_m": None, "max_river_m": None, "min_lake_ha": None,
+    },
 ]
 
 # Geographic scope. Leave `municipalities` empty and `centres` empty to scan all
 # of Lithuania; add centres to draw radius circles around named places instead.
+# A centre may be a settlement or a lake — nature.resolve_centre tries the
+# gazetteer first and the water register second, because some of the country
+# worth searching is named after its water and has no village of its own.
 FIELDS = ("key", "name", "note", "enabled", "min_price", "max_price",
           "min_plot_ares", "min_house_m2", "municipalities",
           "require_any", "require_all", "exclude_any", "sources",
@@ -423,10 +479,13 @@ def _radius_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Mis
     radius = profile.get("radius_km")
     if not (centres and radius):
         return []
-    from .sources.nature import geocode
+    from .sources.nature import geocode, resolve_centre
     from .geo import dist_m
     e, n = listing.get("easting"), listing.get("northing")
     if e is None or n is None:
+        # A listing's own place is resolved with geocode, not resolve_centre:
+        # a locality is a settlement, and a homestead must never be placed in
+        # the middle of a lake that happens to share its name.
         place = (geocode(listing.get("locality"), listing.get("municipality"))
                  or geocode(listing.get("municipality")))
         if not place:
@@ -434,14 +493,30 @@ def _radius_misses(listing: dict[str, Any], profile: dict[str, Any]) -> list[Mis
                          "vietos nustatyti nepavyko, o profilis riboja spinduliu")]
         e, n = place["easting"], place["northing"]
     best = None
+    unresolved: list[str] = []
     for c in centres:
-        centre = geocode(c)
+        centre = resolve_centre(c)
         if not centre:
+            unresolved.append(str(c))
             continue
         d = dist_m(e, n, centre["easting"], centre["northing"]) / 1000
         best = d if best is None else min(best, d)
     if best is None:
         return [Miss("radius_km", HARD, "nė vienas profilio centras neatpažintas")]
+    # One unrecognised centre out of five used to `continue` in silence: the
+    # profile then searched four circles, returned a smaller answer than it was
+    # asked for, and said nothing — no error, no warning, and a UI still
+    # reading "5 centrai". Loud instead, and hard rather than soft, for the
+    # same reason api.list_candidates raises 404 on an unknown `near`: a
+    # distance measured against an incomplete set of centres is not a smaller
+    # true answer, it is an answer to a different question. It stays visible
+    # until the centre is fixed or dropped, and re-evaluation clears it once
+    # the gazetteer finishes downloading on a fresh install.
+    if unresolved:
+        names = ", ".join(f"„{c}“" for c in unresolved)
+        return [Miss("radius_km", HARD,
+                     f"profilio centras neatpažintas: {names} — ieškota "
+                     f"siauriau, nei nurodo profilis")]
     if best > float(radius):
         return [Miss("radius_km", SOFT,
                      f"{best:.0f} km nuo artimiausio centro > {radius:.0f} km",

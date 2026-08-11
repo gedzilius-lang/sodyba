@@ -368,6 +368,12 @@
         <label class="field"><span>Iki upės ne daugiau (m)</span><input id="epRiver" type="number" min="0" step="100"></label>
         <label class="field"><span>Min. ežero plotas (ha)</span><input id="epLakeHa" type="number" min="0" step="1"></label>
       </div>
+      <!-- What the centres above actually resolved to. A centre nobody can
+           resolve is caught at evaluation time; a centre that resolves to the
+           WRONG place is not — "Varniai" lands on Varnionių k. in Radviliškio
+           rajono, 150 km away — and it looks identical to a correct one until
+           it is read back. -->
+      <p class="hint centres-out" id="epCentresOut"></p>
       <button class="btn full" id="btnSaveProfile">Išsaugoti profilį</button>
 
       <hr class="sep">
