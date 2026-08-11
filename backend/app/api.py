@@ -42,6 +42,25 @@ def settings() -> dict[str, Any]:
     return merged
 
 
+def _days_listed(listed_at: Any) -> int | None:
+    """How many days the advert has been online, or None if the date is unknown.
+
+    The point of storing listed_at at all. The saved Prienai homestead has been
+    advertised since 2021-07-05 at 6 000 EUR — five years unsold is the
+    strongest evidence available that an asking price is wrong, and unlike a
+    valuation it costs one subtraction and no data source anybody has to buy.
+    Clamped at zero: a listing dated in the future is a parse error or a clock
+    problem, and "-3 days on the market" would be read as a number.
+    """
+    if not listed_at:
+        return None
+    try:
+        posted = date.fromisoformat(str(listed_at)[:10])
+    except ValueError:
+        return None
+    return max((date.today() - posted).days, 0)
+
+
 def _row_to_candidate(r) -> dict[str, Any]:
     c = {
         "id": r["id"], "ref": r["ref"], "source": r["source"], "url": r["url"],
@@ -49,6 +68,8 @@ def _row_to_candidate(r) -> dict[str, Any]:
         "cadastral_no": r["cadastral_no"], "price_eur": r["price_eur"],
         "house_m2": r["house_m2"], "plot_ares": r["plot_ares"],
         "auction_ends_at": r["auction_ends_at"], "notes": r["notes"],
+        "listed_at": r["listed_at"], "days_listed": _days_listed(r["listed_at"]),
+        "contact_phone": r["contact_phone"], "contact_email": r["contact_email"],
         "archived": bool(r["archived"]), "updated_at": r["updated_at"],
         "profiles": json.loads(r["profiles_json"] or "[]"),
         "easting": r["easting"], "northing": r["northing"],
@@ -197,6 +218,7 @@ def list_candidates(
         rows = cx.execute(sql, args).fetchall()
 
     items = [_row_to_candidate(r) for r in rows]
+
     if profile:
         items = [c for c in items if profile in (c.get("profiles") or [])]
     if near and radius_km:
@@ -292,16 +314,28 @@ def update_candidate(cid: int, body: CandidateIn) -> dict[str, Any]:
             merged[col] = json.dumps({**json.loads(row[col]), **patch.get(jkey, {})},
                                      ensure_ascii=False)
         archived = int(patch.get("archived", bool(row["archived"])))
+        # RETENTION. contact_phone and contact_email are a private individual's
+        # details, kept for exactly one purpose: asking about this property.
+        # Archiving is the operator saying the property is rejected, so that
+        # purpose is spent and the details are erased in the same statement
+        # that sets the flag — not by a nightly job that might not run, and not
+        # merely hidden from the UI. Idempotent: they stay NULL on every later
+        # PATCH of an archived row, so un-archiving cannot resurrect them
+        # either; a re-poll of a still-live advert is the only way back, which
+        # is the correct answer, because that is a fresh purpose.
+        phone = None if archived else row["contact_phone"]
+        mail = None if archived else row["contact_email"]
         cx.execute(
             "UPDATE candidate SET source=?,url=?,title=?,municipality=?,locality=?,"
             "cadastral_no=?,price_eur=?,house_m2=?,plot_ares=?,auction_ends_at=?,"
             "flags_json=?,scores_json=?,costs_json=?,checks_json=?,notes=?,archived=?,"
+            "contact_phone=?,contact_email=?,"
             "updated_at=datetime('now') WHERE id=?",
             (cols["source"], cols["url"], cols["title"], cols["municipality"],
              cols["locality"], cols["cadastral_no"], cols["price_eur"], cols["house_m2"],
              cols["plot_ares"], cols["auction_ends_at"], merged["flags_json"],
              merged["scores_json"], merged["costs_json"], merged["checks_json"],
-             cols["notes"], archived, cid),
+             cols["notes"], archived, phone, mail, cid),
         )
         row = cx.execute("SELECT * FROM candidate WHERE id=?", (cid,)).fetchone()
     return _row_to_candidate(row)
