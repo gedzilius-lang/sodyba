@@ -11,6 +11,12 @@ shape as a filter that quietly stops filtering.
 The list is pinned to `sources/registry.py`, which AGENT.md section 3 names as
 the single authority on sources, so adding a portal there and forgetting the
 drawer fails here instead of shipping another blank field.
+
+Since then app.js has stopped letting a value with no option pass silently —
+it gets an option of its own, marked as not being in the list — so a key
+missing from here now shows up as an oddity in the drawer rather than as
+nothing. That is a safety net, not a substitute for this file: the list is
+still where a source becomes selectable. See test_frontend_unset_select.py.
 """
 import pathlib
 import re
@@ -19,6 +25,13 @@ from backend.app.sources import registry
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 INDEX_HTML = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+# The empty option is not a source and is not expected to be one: it is how a
+# row with no source at all is displayed, which is a separate bug with its own
+# suite (test_frontend_unset_select.py). It is excluded here rather than
+# tolerated by a looser check, so an option with a genuinely unknown value
+# still fails below.
+UNSET = ""
 
 # The one registry key with no business in this list. `data_gov` is the
 # open-data API the nature layers are downloaded from (get.data.gov.lt); it
@@ -51,7 +64,7 @@ def test_every_listing_source_in_the_registry_has_an_option():
 
 
 def test_no_option_names_a_source_the_registry_does_not_know():
-    have = set(_option_values(_source_select()))
+    have = set(_option_values(_source_select())) - {UNSET}
     known = {s.key for s in registry.SOURCES}
     assert not (have - known), f"options for unknown sources: {sorted(have - known)}"
 

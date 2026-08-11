@@ -307,9 +307,14 @@ async function loadCandidates() {
     tr.appendChild(td(`<span class="ref">${esc(c.ref)}</span>`, null, 'Nr.'));
     const chips = (c.profiles || [])
       .map((k) => `<span class="chip">${esc(profileName(k))}</span>`).join('') + duplicateChip(c.notes);
+    // Where it is and where it came from. A row with no source says so: an
+    // empty half of "municipality · source" reads as a rendering gap, and the
+    // gap is exactly what made a missing source invisible in the first place.
+    const provenance = [c.municipality, c.source || 'šaltinis nenurodytas']
+      .filter(Boolean).map(esc).join(' · ');
     tr.appendChild(td(
       `<span class="place">${esc(c.locality || c.title || '—')}` +
-      `<small>${esc(c.municipality || '')} · ${esc(c.source)}</small>${chips}</span>`,
+      `<small>${provenance}</small>${chips}</span>`,
       null, 'Vietovė'));
     tr.appendChild(td(priceCell(c), 'num', 'Kaina'));
     tr.appendChild(td(coreBar(c), null, 'Vertinimo pjūvis'));
@@ -442,11 +447,33 @@ function renderProfiles(counts = {}) {
     box.appendChild(row);
   });
 
+  const opts = PROFILES
+    .map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('');
+
   const sel = $('fProfile');
   const keep = sel.value;
-  sel.innerHTML = '<option value="">Visi profiliai</option>' +
-    PROFILES.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('');
+  sel.innerHTML = '<option value="">Visi profiliai</option>' + opts;
   sel.value = keep;
+  // A profile that is gone cannot stay in the filter: `.value` would read ""
+  // and the search would quietly stop filtering while the box showed nothing
+  // at all. Say "Visi profiliai", which is what is then actually happening.
+  if (sel.selectedIndex < 0) sel.selectedIndex = 0;
+
+  // The editor's picker is rebuilt from the same list rather than only at
+  // boot. It used to be built once, so renaming a profile and saving left the
+  // picker labelling it with the name it no longer had — watched happening in
+  // Chrome — while the filter beside it had already updated.
+  const pick = $('epPick');
+  const editing = pick.value;
+  pick.innerHTML = opts;
+  pick.value = editing;
+  if (pick.selectedIndex < 0 && pick.options.length) {
+    // The profile being edited no longer exists. Move to a real one and load
+    // it, so the fields below are never another profile's values under this
+    // one's name.
+    pick.selectedIndex = 0;
+    if (EDITING) loadProfileEditor();
+  }
 }
 
 async function saveProfiles() {
@@ -762,15 +789,56 @@ function syncOpenAd(url) {
   a.hidden = !ok;
 }
 
+/* Putting a stored value into a <select> without inventing or losing one.
+   ----------------------------------------------------------------------
+   A <select> can only show a value it has an <option> for. Handed anything
+   else Chrome selects nothing: the control renders blank AND `.value` reads
+   "", so collect() writes that blank back over what was stored. Both halves
+   were watched happening in Chrome on a row stored as source "aruodas_lt",
+   municipality "Utenos r.": the drawer showed two empty boxes, and pressing
+   Išsaugoti without touching anything left source "" and municipality NULL.
+   The opposite failure was the reported one: `CURRENT.source || 'evarzytynes'`
+   turned a row with no source into a claim that it came from a portal this
+   project is forbidden to fetch, and saving made the claim permanent.
+
+   So a value is shown as itself or as its own absence, never as some other
+   value:
+   - nothing stored selects the explicit "nenurodytas" option. Every select
+     that shows a stored value must carry one; it is not a source or a
+     municipality and cannot be read as one.
+   - something stored that the list does not contain gets an option of its own,
+     carrying the value itself and marked as not being in the list. The datum
+     stays visible, `.value` still equals what is stored so a save preserves
+     it, and the operator can see there is something to correct — a spelling
+     the list never had, or a source key that has been renamed.
+   The option is built with createElement and textContent rather than
+   innerHTML, so a stored value cannot be parsed as markup: the same rule esc()
+   enforces everywhere else in this file, kept by not building markup at all. */
+function showStoredValue(sel, stored) {
+  sel.querySelectorAll('option[data-unlisted]').forEach((o) => o.remove());
+  const v = stored === null || stored === undefined ? '' : String(stored);
+  if (v !== '' && ![...sel.options].some((o) => o.value === v)) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = `${v} — nėra sąraše`;
+    opt.dataset.unlisted = '1';
+    sel.insertBefore(opt, sel.firstChild);
+  }
+  sel.value = v;
+}
+
 function openDrawer(c) {
+  // A new object declares no source. It has not come from anywhere yet, and
+  // the operator is the only one who knows where it came from — pre-selecting
+  // a portal here is how a row acquires a provenance nobody asserted.
   CURRENT = c ? structuredClone(c) : {
-    ref: null, source: 'evarzytynes', flags: {}, scores: {}, costs: {}, checks: {},
+    ref: null, source: '', flags: {}, scores: {}, costs: {}, checks: {},
     archived: false,
   };
   $('dRef').textContent = CURRENT.ref || 'NAUJAS';
   $('dTitle').textContent = CURRENT.locality || CURRENT.title || 'Naujas objektas';
   $('dName').value = CURRENT.title || '';
-  $('dSource').value = CURRENT.source || 'evarzytynes';
+  showStoredValue($('dSource'), CURRENT.source);
   $('dUrl').value = CURRENT.url || '';
   $('dLocality').value = CURRENT.locality || '';
   $('dCad').value = CURRENT.cadastral_no || '';
@@ -779,7 +847,7 @@ function openDrawer(c) {
   $('dPlot').value = CURRENT.plot_ares ?? '';
   $('dEnds').value = (CURRENT.auction_ends_at || '').slice(0, 10);
   $('dNotes').value = CURRENT.notes || '';
-  $('dMuni').value = CURRENT.municipality || '';
+  showStoredValue($('dMuni'), CURRENT.municipality);
   $('btnDelete').style.visibility = CURRENT.id ? 'visible' : 'hidden';
   $('btnArchive').textContent = CURRENT.archived ? 'Grąžinti iš archyvo' : 'Archyvuoti';
 
@@ -954,9 +1022,22 @@ function wire() {
     closeDrawer(); await loadCandidates(); toast('Ištrinta');
   };
 
+  /* The source is asked for, not assumed. It decides two things at once: what
+     the row will say about where it came from, and which parser reads the
+     price — api.paste routes on the declared key and only sniffs the text when
+     there is none, and sniffing an auction notice pasted without its URL reads
+     the market valuation where the auction parser reads the starting price
+     (40000 against 25000 on the same property). This field used to arrive
+     pre-set to `evarzytynes`, which answered both questions by guessing. The
+     text stays in the box while the operator goes and picks. */
   $('btnPaste').onclick = async () => {
     const text = $('pText').value.trim();
     if (!text) return toast('Įklijuok skelbimo tekstą', true);
+    if (!$('dSource').value) {
+      document.querySelector('[data-tab="facts"]').click();
+      $('dSource').focus();
+      return toast('Nurodyk šaltinį (skiltis „Faktai“) — nuo jo priklauso kainos skaitymas', true);
+    }
     try {
       const c = await api('/paste', {
         method: 'POST',
@@ -1018,16 +1099,20 @@ function wire() {
     // All 60 municipalities: the default scope is the whole country.
     const all = SCHEMA.all_municipalities || SCHEMA.municipalities;
     const opts = all.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+    // Two selects, two different empty options, because "" means two different
+    // things. On the filter it is the absence of a filter — every municipality
+    // is included. On the drawer it is a property of one row: this candidate's
+    // municipality is not recorded. Naming it in words rather than leaving it
+    // as a bare dash is what showStoredValue() relies on to say "unknown"
+    // without naming a municipality that would be read as a fact.
     $('fMuni').innerHTML = '<option value="">Visa Lietuva</option>' + opts;
-    $('dMuni').innerHTML = '<option value="">—</option>' + opts;
+    $('dMuni').innerHTML = '<option value="">— nenurodyta —</option>' + opts;
 
     $('sBudget').value = SETTINGS.budget_ceiling_eur;
     $('sMinScore').value = SETTINGS.min_score;
     $('sContingency').value = Math.round(SETTINGS.contingency_pct * 100);
 
-    PROFILES = SCHEMA.profiles;
-    $('epPick').innerHTML =
-      PROFILES.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('');
+    PROFILES = SCHEMA.profiles;   // renderProfiles() below fills both pickers
 
     // Collapse the filter panel wherever the rail is stacked above the content
     // rather than beside it. Below 1080px ten expanded controls meant scrolling

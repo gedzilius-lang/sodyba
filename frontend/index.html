@@ -264,17 +264,33 @@
         <label class="field"><span>Pavadinimas</span><input id="dName"></label>
         <!-- Every key in backend/app/sources/registry.py that can put a row in
              the candidate table needs an <option> here. A <select> handed a
-             value it has no option for shows nothing at all, so a missing key
-             is a blank field, not an error: "rinka" was absent and the source
-             therefore read empty on all 35 real rows, which are all from
-             rinka.lt. test_frontend_source_select.py pins the list to the
-             registry so the next source added there cannot go missing here.
+             value it has no option for selects nothing at all, so a missing key
+             used to be a blank field rather than an error: "rinka" was absent
+             and the source therefore read empty on all 35 real rows, which are
+             all from rinka.lt. app.js no longer lets that pass silently — an
+             unlisted value now gets an option of its own, marked as unlisted —
+             but a key missing from this list is still a defect, so
+             test_frontend_source_select.py pins the list to the registry and
+             the next source added there cannot go missing here.
              `data_gov` is deliberately not offered: it is the open-data API
              behind the nature layers, never a listing's origin. Two keys,
              two hosts, two policies: turtas.lt (Turto bankas) is polled,
              aukcionai.turtas.lt is link-only. -->
+        <!-- The first option is the absence of a source, not a source. A row
+             can genuinely have none — a hand-typed object, an alert whose
+             parser could not name the portal — and until this option existed
+             app.js coerced that nothing to `evarzytynes`, so the drawer read
+             "evarzytynes.lt" over a row that had never been near it, and one
+             press of Išsaugoti wrote that claim into the database — both halves
+             watched happening in Chrome before the fix. See showStoredValue()
+             in app.js. evarzytynes.lt is a source this project may not fetch
+             (registry.py: ALERT_ONLY), which is why a wrong answer here is
+             worse than no answer.
+             value="" is what the empty state stores; the label names it in
+             words so it cannot be mistaken for a host. -->
         <label class="field"><span>Šaltinis</span>
           <select id="dSource">
+            <option value="">— nenurodytas —</option>
             <option value="rinka">rinka.lt</option>
             <option value="evarzytynes">evarzytynes.lt</option>
             <option value="turtas">turtas.lt</option>
@@ -355,7 +371,7 @@
     </div>
 
     <div class="tabpane" data-pane="paste">
-      <p class="hint">evarzytynes.lt ir skelbimų portalai draudžia automatinę prieigą. Užsiprenumeruok jų pačių el. pašto pranešimus (jie ateis automatiškai) arba įklijuok tekstą čia — kaina, plotas, savivaldybė ir unikalus Nr. bus ištraukti.</p>
+      <p class="hint">evarzytynes.lt ir skelbimų portalai draudžia automatinę prieigą. Užsiprenumeruok jų pačių el. pašto pranešimus (jie ateis automatiškai) arba įklijuok tekstą čia — kaina, plotas, savivaldybė ir unikalus Nr. bus ištraukti. Pirmiausia skiltyje „Faktai“ nurodyk šaltinį: nuo jo priklauso, kuris skaitytuvas ims kainą (varžytynių skelbime pradinė kaina ir rinkos vertė yra skirtingi skaičiai).</p>
       <label class="field"><span>Skelbimo tekstas</span><textarea id="pText" rows="10" placeholder="Įklijuok visą skelbimo tekstą…"></textarea></label>
       <label class="field"><span>Nuoroda</span><input id="pUrl" type="url" placeholder="https://"></label>
       <button class="btn full" id="btnPaste">Sukurti objektą iš teksto</button>
