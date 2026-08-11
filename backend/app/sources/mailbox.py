@@ -181,10 +181,13 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
                 ("\n" + " · ".join(bits), twin["id"]))
             if state == "match" and twin["match_state"] == "near":
                 _promote(cx, twin, listing, hits)
-                # The caller decides what to notify with `if ref and hits:`, so
-                # the twin's ref is what turns a promotion into a push. The
-                # fingerprint short-circuit above means a re-send of the same
-                # listing never reaches here, so this cannot push twice.
+                # The caller decides what to notify with `if ref and hits:`, so returning
+                # the twin's ref is what turns a promotion into a push. It cannot push
+                # twice, but not because of the fingerprint check above: _promote leaves
+                # `fingerprint` alone, so the row keeps the *near* listing's fingerprint
+                # and a re-sent match does reach here. What stops the second push is that
+                # twin["match_state"] is now "match", so this branch is no longer taken.
+                # Do not remove that comparison on the assumption the fingerprint covers it.
                 return twin["ref"]
             return None
         ref = _next_ref(cx)
