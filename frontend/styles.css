@@ -55,6 +55,7 @@ h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
 .tally.over_budget b{color:var(--ochre)}
 .status{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .stat-line{font-family:var(--mono);font-size:11px;color:var(--paper-dim)}
+.stat-warn{color:var(--ochre)}
 
 /* ---------------------------------------------------------------- buttons */
 .btn{
@@ -300,6 +301,13 @@ tr.is-archived{opacity:.42}
   .status .btn{flex:1 1 auto}
   .shell{padding:12px;gap:12px}
   .rail-block{padding:13px}
+
+  /* The status line now reports two ingestion paths plus a stale-robots
+     warning, so it runs longer than the button next to it. Wrapping lets the
+     button drop to its own full-width row below the text instead of the two
+     fighting over half the screen each. */
+  .ingest-bar{flex-wrap:wrap}
+  .ingest-bar .btn{flex:1 1 auto}
 
   .table-wrap{overflow-x:visible}
   .grid,.grid tbody,.grid tr,.grid td{display:block;width:auto}

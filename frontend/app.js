@@ -440,34 +440,96 @@ async function loadAdvice() {
 }
 
 /* -------------------------------------------------------------- ingestion */
-async function pollMailbox(manual = false) {
-  const btn = $('btnPoll');
-  if (manual) { btn.disabled = true; btn.textContent = 'Tikrinama…'; }
+// POST /api/ingest/poll answers {source_key: {status, created, scanned, rejected}}
+// — one entry per key in sources/poller.py's POLLED list. status is "ok" or
+// "error"; there is no "skipped" at this level because every polled source is,
+// by definition, configured (registry.py gates that at start-up, not per-call).
+function summarisePoll(result) {
+  const keys = Object.keys(result || {});
+  if (!keys.length) return 'šaltinių nėra';
+  return keys.map((k) => {
+    const r = result[k] || {};
+    if (r.status !== 'ok') return `${k}: klaida`;
+    const n = (r.created || []).length;
+    return n
+      ? `${k}: ${n} nauji (peržiūrėta ${r.scanned ?? 0})`
+      : `${k}: naujų nėra (peržiūrėta ${r.scanned ?? 0})`;
+  }).join(', ');
+}
+
+// POST /api/ingest/mailbox answers {status: "ok", created, scanned, rejected}
+// or {status: "skipped", reason} when SR_IMAP_* is blank, or {status: "error",
+// error}. "skipped" is an intended state on a deployment with no alert
+// mailbox — it must never be reported the same way as "error".
+function summariseMailbox(r) {
+  if (r.status === 'skipped') return 'paštas: neįjungtas';
+  if (r.status === 'error') return r.error ? `paštas: klaida (${r.error})` : 'paštas: klaida';
+  const n = (r.created || []).length;
+  return n ? `paštas: ${n} nauji` : `paštas: naujų nėra`;
+}
+
+async function runSourcePoll() {
   try {
-    const r = await api('/ingest/mailbox', { method: 'POST' });
-    if (r.status === 'skipped') {
-      toast('IMAP nesukonfigūruotas — nustatyk SR_IMAP_* kintamuosius', true);
-    } else if (r.status === 'error') {
-      toast(`Pašto klaida: ${r.error}`, true);
-    } else {
-      const n = (r.created || []).length;
-      toast(n ? `${n} nauji objektai` : `Naujų nėra (peržiūrėta ${r.scanned})`);
-      await loadCandidates();
-    }
-  } catch (e) { toast(e.message, true); }
+    const result = await api('/ingest/poll', { method: 'POST' });
+    return { text: summarisePoll(result), bad: Object.values(result).some((r) => r.status !== 'ok') };
+  } catch (e) {
+    return { text: `šaltiniai: klaida (${e.message})`, bad: true };
+  }
+}
+
+async function runMailboxPoll() {
+  try {
+    const result = await api('/ingest/mailbox', { method: 'POST' });
+    return { text: summariseMailbox(result), bad: result.status === 'error' };
+  } catch (e) {
+    return { text: `paštas: klaida (${e.message})`, bad: true };
+  }
+}
+
+// The only ingestion control in the console. It used to hit /ingest/mailbox
+// alone, which on a deployment with no alert mailbox (SR_IMAP_* blank) meant
+// pressing it did nothing. It now runs both ingestion paths — the rinka.lt
+// poller and the mailbox — and reports each honestly, because a control that
+// looks like it works while doing nothing is worse than no control at all.
+// A poll can take a minute or more (crawl-delay between listings), so the
+// button stays disabled and its label names whichever phase is running.
+async function checkNow() {
+  const btn = $('btnPoll');
+  btn.disabled = true;
+  btn.textContent = 'Tikrinami šaltiniai…';
+  const poll = await runSourcePoll();
+  btn.textContent = 'Tikrinamas paštas…';
+  const mailbox = await runMailboxPoll();
+  toast(`${poll.text} · ${mailbox.text}`, poll.bad || mailbox.bad);
+  await loadCandidates();
   await loadIngestStatus();
-  if (manual) { btn.disabled = false; btn.textContent = 'Tikrinti dabar'; }
+  btn.disabled = false;
+  btn.textContent = 'Tikrinti dabar';
 }
 
 async function loadIngestStatus() {
   try {
     const r = await api('/ingest/log?limit=5');
+    const ing = SCHEMA.ingest;
+    const byKey = Object.fromEntries((ing.sources || []).map((s) => [s.key, s]));
     const mail = r.items.find((x) => x.source === 'mailbox');
-    $('ingestStatus').textContent = mail
-      ? `Paštas: ${mail.status} · ${mail.detail} · ${mail.ended_at}`
-      : (SCHEMA.ingest.mailbox_configured
-          ? 'Paštas sukonfigūruotas, dar netikrinta'
-          : 'Paštas neįjungtas — žr. README');
+    const mailText = mail
+      ? `paštas: ${esc(mail.status)} · ${esc(mail.detail)} · ${esc(mail.ended_at)}`
+      : (ing.mailbox_configured
+          ? 'paštas sukonfigūruotas, dar netikrinta'
+          : 'paštas neįjungtas — žr. README');
+    const polled = (ing.polled || []).map((k) => esc(byKey[k]?.host || k));
+    const sourcesText = polled.length
+      ? `tikrinama: ${polled.join(', ')}`
+      : 'automatiškai tikrinamų šaltinių nėra';
+    let html = `${sourcesText} · ${mailText}`;
+    // A source absent here for over 90 days means its robots.txt permission
+    // has not been re-checked since — the thing that keeps polling lawful.
+    const stale = (ing.stale_sources || []).map((k) => esc(byKey[k]?.host || k));
+    if (stale.length) {
+      html += ` · <span class="stat-warn">⚠ robots.txt patikra senesnė nei 90 d.: ${stale.join(', ')}</span>`;
+    }
+    $('ingestStatus').innerHTML = html;
   } catch { /* status line is cosmetic */ }
 }
 
@@ -687,7 +749,7 @@ function wire() {
 
   $('btnLocate').onclick = locate;
   $('btnAdvice').onclick = () => loadAdvice().catch((e) => toast(e.message, true));
-  $('btnPoll').onclick = () => pollMailbox(true);
+  $('btnPoll').onclick = checkNow;
   $('btnSaveProfile').onclick = () => saveProfileEditor().catch((e) => toast(e.message, true));
   $('btnTestProfile').onclick = () => testProfile().catch((e) => toast(e.message, true));
   $('epPick').onchange = loadProfileEditor;
