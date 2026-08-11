@@ -293,9 +293,13 @@ The ranking metric is therefore **EUR per score point**, not price.
   add a `Source(...)` to `sources/registry.py` with today's date as
   `checked_at` and the verdict in the site's own words; write an adapter under
   `sources/adapters/` exposing `list_url()`, `list_ids(html)` and
-  `parse_detail(html, url)`, all pure; add the key to `poller.POLLED`. Skip the
+  `parse_detail(html, url)`, all pure; register it in the `ADAPTERS` dict in
+  `sources/adapters/__init__.py`; add the key to `poller.POLLED`. Skip the
   registry step and `assert_pollable` refuses the source outright — that is the
-  intended behaviour, not an obstacle to route around.
+  intended behaviour, not an obstacle to route around. Skip the `ADAPTERS`
+  step and `poll_source` raises `PolicyError` too, but only once polling
+  actually runs — a more confusing failure to hit after believing the setup
+  was done.
 - New bulk dataset (not listings) → add a module under `sources/` exposing an
   async `refresh_*()` and call it from `main.scheduled_refresh`.
 - New scoring criterion → add to `CRITERIA` in `scoring.py`. The UI reads
