@@ -188,7 +188,9 @@ A systemd unit for the non-Docker route is in `README.md`.
 
 ## 6. Enabling automatic ingestion
 
-Without this the app works, but nothing arrives on its own.
+Without this the app works, but nothing arrives on its own. The operator's
+step-by-step version of this section, with the saved searches to create and
+the portals that will and will not be understood, is `docs/EMAIL_ALERTS.md`.
 
 1. Create a dedicated mailbox. For Gmail, generate an **App Password**
    (`https://myaccount.google.com/apppasswords`) — the account password will not

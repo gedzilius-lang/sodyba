@@ -47,7 +47,9 @@ polite polling interval, and it cannot get you banned.
 
 **Setup:** create a dedicated mailbox, set `SR_IMAP_*` in `.env` (Gmail needs an
 App Password), create the saved searches on each portal pointed at that mailbox,
-restart. `SR_TELEGRAM_*` is optional but recommended.
+restart. `SR_TELEGRAM_*` is optional but recommended. Step by step, including
+which portals are understood on arrival and which are not:
+[`docs/EMAIL_ALERTS.md`](docs/EMAIL_ALERTS.md).
 
 ### Also worth knowing
 
