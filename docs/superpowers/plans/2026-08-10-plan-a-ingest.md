@@ -246,9 +246,21 @@ def test_decimal_comma_tail_with_thousands_separator():
     assert _price("12 500,50 €") == 12500.0
 
 
+def test_non_breaking_space_thousands_separator():
+    # built from the code point so no editor can turn it back into a space
+    assert _price("17" + chr(0xa0) + "000 EUR") == 17000.0
+
+
 def test_no_price_returns_none():
     assert _price("Sodyba prie ežero") is None
 ```
+
+Note the two escape sequences in the regex above: `\u00a0` and `\u20ac` are written
+as six literal characters each, not as the symbols they denote. `re` resolves them
+itself, which keeps the pattern line pure ASCII and immune to an editor rewriting
+the file in the wrong encoding. Writing them as literal characters is how the first
+attempt at this task shipped a regex that silently returned `0.0` for a
+non-breaking-space price.
 
 - [ ] **Step 2: Run it to see it fail**
 
@@ -263,7 +275,7 @@ Expected: `test_decimal_comma_tail` and `test_decimal_comma_tail_with_thousands_
 In `backend/app/sources/parsers.py`, replace line 21:
 
 ```python
-PRICE_RE = re.compile(r"(\d{1,3}(?:[ . ]\d{3})+|\d{3,7})\s*(?:EUR|€|Eur)", re.I)
+PRICE_RE = re.compile(r"(\d{1,3}(?:[ .\u00a0]\d{3})+|\d{3,7})\s*(?:EUR|\u20ac|Eur)", re.I)
 ```
 
 with:
@@ -272,7 +284,7 @@ with:
 # The optional decimal tail matters: portals render "60000,00 €", and without
 # it the currency token no longer follows the digits and nothing matches.
 PRICE_RE = re.compile(
-    r"(\d{1,3}(?:[ . ]\d{3})+|\d{3,8})(?:[.,]\d{1,2})?\s*(?:EUR|€|Eur)", re.I)
+    r"(\d{1,3}(?:[ .\u00a0]\d{3})+|\d{3,8})(?:[.,]\d{1,2})?\s*(?:EUR|\u20ac|Eur)", re.I)
 ```
 
 The captured group still excludes the decimals, so `_f` returns whole euros and needs no change.
