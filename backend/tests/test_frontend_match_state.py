@@ -7,6 +7,7 @@ unescaped interpolation, but they do not prove the browser renders correctly.
 See task-12-report.md for what was and was not verified by other means.
 """
 import pathlib
+import re
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 APP_JS = (FRONTEND / "app.js").read_text(encoding="utf-8")
@@ -33,10 +34,21 @@ def test_table_header_gains_atitikimas_column_before_verdiktas():
 
 def test_match_state_change_reloads_candidates():
     """A select with no wired change handler is a control that does nothing —
-    it must trigger loadCandidates like every other <select> filter does."""
-    idx = APP_JS.index("'fMatchState'")
-    following = APP_JS[idx: idx + 200]
-    assert "loadCandidates" in following
+    it must trigger loadCandidates like every other <select> filter does.
+
+    This reads the wire-up list itself. It used to take the first occurrence of
+    the id in app.js and look 200 characters ahead for "loadCandidates" — but
+    the first occurrence is in filterQuery(), where the id is only *read*, and
+    what followed it was `async function loadCandidates()` by accident of
+    ordering. Inserting anything between the two broke the test without
+    breaking the wiring, which is the wrong way round.
+    """
+    m = re.search(
+        r"\[([^\]]*)\]\.forEach\(\(id\) =>\s*\$\(id\)\.addEventListener\('change', loadCandidates\)\)",
+        APP_JS,
+    )
+    assert m, "no change-handler wire-up calling loadCandidates found in app.js"
+    assert "'fMatchState'" in m.group(1)
 
 
 def test_near_tier_cell_uses_match_lt_label_map():

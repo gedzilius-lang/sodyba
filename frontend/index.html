@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sodyba Radar</title>
+<!-- The app mark as an inline SVG data URI: three bands in the palette's
+     lichen, ochre and oxide. No binary asset, no build step, no request — a
+     declared icon is also what stops every desktop load logging a 404 for
+     /favicon.ico. `#` is percent-encoded because it would otherwise start a
+     URL fragment. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2312151a'/%3E%3Crect x='7' y='5' width='18' height='7' fill='%238fae5d'/%3E%3Crect x='7' y='13' width='18' height='7' fill='%23c8983a'/%3E%3Crect x='7' y='21' width='18' height='6' fill='%23a94f3c'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -27,8 +33,17 @@
 <main class="shell">
 
   <aside class="rail" id="rail">
-    <section class="rail-block">
-      <h2 class="eyebrow">Filtrai</h2>
+    <!-- A <details>, not a <section>: on a handset the whole panel collapses to
+         its summary so the candidate list is on the first screen, and the
+         summary states how many filters are narrowing that list. `open` is in
+         the markup so a desktop — where the rail costs the content nothing —
+         renders it expanded even before app.js runs; app.js closes it on a
+         handset at boot, because `open` cannot be set from a media query. -->
+    <details class="rail-block" id="filterPanel" open>
+      <summary class="eyebrow">
+        <span>Filtrai</span>
+        <span class="fcount" id="filterCount"></span>
+      </summary>
 
       <label class="field">
         <span>Paieška</span>
@@ -123,7 +138,7 @@
 
       <label class="check"><input type="checkbox" id="fArchived"><span>Rodyti archyvuotus</span></label>
       <button class="btn btn-ghost full" id="btnClear">Išvalyti filtrus</button>
-    </section>
+    </details>
 
     <section class="rail-block">
       <h2 class="eyebrow">Paieškos profiliai</h2>
@@ -170,12 +185,17 @@
       </div>
       <div class="table-wrap">
         <table class="grid" id="candTable">
+          <!-- Nine columns, not ten. "Balas" carries the EUR-per-score-point
+               figure beneath the score: they are the same judgement and, on an
+               unscored candidate, two columns printed the same dash twice.
+               Column widths are set by nth-child in styles.css — adding or
+               reordering a column means revisiting that block. -->
           <thead>
             <tr>
               <th>Nr.</th><th>Vietovė</th><th class="num">Kaina</th>
-              <th class="core-col">Vertinimo pjūvis</th>
+              <th>Vertinimo pjūvis</th>
               <th class="num">Balas</th><th class="num">Visi kaštai</th>
-              <th>Gamta</th><th class="num">EUR/tšk.</th><th>Atitikimas</th><th>Verdiktas</th>
+              <th>Gamta</th><th>Atitikimas</th><th>Verdiktas</th>
             </tr>
           </thead>
           <tbody id="candBody"></tbody>

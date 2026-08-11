@@ -96,6 +96,27 @@ function natureCell(c) {
   return `<div class="nat">${bits.join('<br>') || '—'}</div>`;
 }
 
+/* Score and the ranking metric in one cell.
+   These were two columns, "Balas" and "EUR/tšk.", and on an unscored candidate
+   both printed an em dash — two full columns of dashes, because unscored is the
+   normal state until the scores are entered by hand. Stating the same absence
+   twice is noise, and it cost the judgement columns room they needed on the
+   right, where losing the verdict is the worst outcome.
+   One column now. Scored: the weighted score with EUR per score point beneath
+   it — the actual ranking metric (AGENT.md section 8), so it stays visible
+   rather than being demoted to a tooltip. Unscored: a single dash. The row
+   still says "unscored" in words — the core-sample column prints NEĮVERTINTA
+   and the verdict tag reads "Neįvertintas" — so nothing is hidden by the dash;
+   it is a placeholder, not the message. No number is invented either way. */
+function scoreCell(c) {
+  if (c.weighted_score === null || c.weighted_score === undefined) {
+    return '<span class="muted">—</span>';
+  }
+  const per = c.eur_per_point === null || c.eur_per_point === undefined
+    ? '' : `<small class="per">${fmt(c.eur_per_point)} EUR/tšk.</small>`;
+  return `${c.weighted_score.toFixed(2)}${per}`;
+}
+
 /* A merged-duplicate line looks like:
    "[dublikatas rinka] · 17300 EUR · 81 m2 · 41 a · <title> · <url>"
    appended to notes when dedupe folds a second-source listing into this row.
@@ -131,12 +152,38 @@ function filterQuery() {
   return p.toString();
 }
 
+/* How many filters are currently narrowing the list.
+   The definition is the app's own: exactly the controls "Išvalyti filtrus"
+   resets, counting a non-empty value as one filter, with "netoli" + "spindulys"
+   counting once because neither does anything without the other. Sort order and
+   "rodyti archyvuotus" are deliberately not counted — they reorder and widen the
+   list, they never hide a candidate.
+   This number exists because the panel collapses on a handset: a filter that is
+   quietly removing rows while its control is off-screen is the failure mode
+   worth guarding against. */
+const FILTER_IDS = ['fQuery', 'fMinPrice', 'fMaxPrice', 'fMuni', 'fProfile',
+                    'fVerdict', 'fMinScore', 'fMaxCost', 'fLake', 'fRiver'];
+
+function activeFilterCount() {
+  const n = FILTER_IDS.filter((id) => String($(id).value).trim() !== '').length;
+  return n + ($('fNear').value.trim() && $('fRadius').value ? 1 : 0);
+}
+
+function updateFilterCount() {
+  const n = activeFilterCount();
+  const el = $('filterCount');
+  el.textContent = n === 0 ? 'nėra' : (n === 1 ? 'aktyvus: 1' : `aktyvūs: ${n}`);
+  el.classList.toggle('is-on', n > 0);
+}
+
 async function loadCandidates() {
   const data = await api(`/candidates?${filterQuery()}`);
   const body = $('candBody');
   body.textContent = '';
   $('candCount').textContent = `${data.count} objekt${data.count === 1 ? 'as' : 'ai'}`;
   $('candEmpty').hidden = data.count > 0;
+
+  updateFilterCount();
 
   data.items.forEach((c) => {
     const tr = document.createElement('tr');
@@ -166,10 +213,9 @@ async function loadCandidates() {
       null, 'Vietovė'));
     tr.appendChild(td(fmt(c.price_eur), 'num', 'Kaina'));
     tr.appendChild(td(coreBar(c), null, 'Vertinimo pjūvis'));
-    tr.appendChild(td(c.weighted_score === null ? '—' : c.weighted_score.toFixed(2), 'num', 'Balas'));
+    tr.appendChild(td(scoreCell(c), 'num', 'Balas'));
     tr.appendChild(td(fmt(c.total_cost), 'num', 'Visi kaštai'));
     tr.appendChild(td(natureCell(c), null, 'Gamta'));
-    tr.appendChild(td(fmt(c.eur_per_point), 'num', 'EUR/tšk.'));
     const misses = Object.values(c.misses || {}).flat();
     const why = misses.map((m) => m.text).join(' · ');
     tr.appendChild(td(
@@ -273,8 +319,12 @@ function renderProfiles(counts = {}) {
   PROFILES.forEach((p) => {
     const row = document.createElement('div');
     row.className = `prow${p.enabled ? '' : ' is-off'}`;
+    // The checkbox sits in a <label> of its own so a thumb has something 44px
+    // to hit: .prow is a div, so unlike the flag and check rows there is no
+    // label wrapping the whole row for the tap to land on.
     row.innerHTML =
-      `<input type="checkbox" ${p.enabled ? 'checked' : ''} title="Įjungti profilį">` +
+      `<label class="ptoggle"><input type="checkbox" ${p.enabled ? 'checked' : ''} ` +
+      `title="Įjungti profilį"></label>` +
       `<span class="pname">${esc(p.name)}<small>${esc(p.note || '')}</small></span>` +
       `<span class="pcount">${counts[p.key] ?? 0}</span>` +
       `<button class="pedit" title="Redaguoti">redag.</button>`;
@@ -789,6 +839,15 @@ function wire() {
     PROFILES = SCHEMA.profiles;
     $('epPick').innerHTML =
       PROFILES.map((p) => `<option value="${esc(p.key)}">${esc(p.name)}</option>`).join('');
+
+    // Collapse the filter panel wherever the rail is stacked above the content
+    // rather than beside it. Below 1080px ten expanded controls meant scrolling
+    // past every one of them to reach the first property — the app opened to
+    // its controls instead of its content. The summary stays, and states how
+    // many filters are active. This width is the same one styles.css reorders
+    // the shell at; CSS cannot do the collapse itself, because `open` is an
+    // attribute rather than a style.
+    if (window.matchMedia('(max-width:1080px)').matches) $('filterPanel').open = false;
 
     renderWeights();
     renderProfiles();

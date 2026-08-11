@@ -97,6 +97,30 @@ h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
 .hint{font-size:11.5px;color:var(--paper-dim);margin:0 0 12px;line-height:1.45}
 .content{display:flex;flex-direction:column;gap:18px;min-width:0}
 
+/* -------------------------------------------------- filter panel disclosure
+   The filter block is a <details>. Open on a desktop, where the rail has a
+   column of its own; closed on a handset, where it used to fill the whole
+   first screen and put the candidates — the reason the app was opened —
+   entirely below the fold. The summary always reports how many filters are
+   active, because a collapsed panel that is quietly removing rows is worse
+   than an expanded one. */
+.rail-block>summary{
+  display:flex;align-items:center;gap:9px;margin:0;cursor:pointer;
+  list-style:none;
+}
+.rail-block>summary::-webkit-details-marker{display:none}
+.rail-block>summary:after{
+  content:"";flex:none;width:7px;height:7px;margin-left:2px;
+  border-right:1.5px solid var(--paper-dim);border-bottom:1.5px solid var(--paper-dim);
+  transform:translateY(-2px) rotate(45deg);transition:transform .15s ease;
+}
+.rail-block[open]>summary:after{transform:translateY(1px) rotate(225deg)}
+.rail-block[open]>summary{margin-bottom:12px}
+.rail-block>summary:hover{color:var(--paper)}
+.fcount{margin-left:auto;font-family:var(--mono);font-size:10px;
+  letter-spacing:.04em;text-transform:none;color:var(--paper-dim)}
+.fcount.is-on{color:var(--ochre)}
+
 /* ---------------------------------------------------------------- fields */
 .field{display:block;margin-bottom:11px}
 .field>span{display:block;font-size:10px;text-transform:uppercase;
@@ -135,15 +159,44 @@ h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
 .table-wrap{overflow-x:auto}
 .empty{padding:26px 16px;text-align:center;color:var(--paper-dim);font-size:13px}
 
-/* ---------------------------------------------------------------- tables */
-.grid{width:100%;border-collapse:collapse;font-size:12.5px}
+/* ---------------------------------------------------------------- tables
+   table-layout:fixed is the whole defence against the table outgrowing the
+   page. Under the default auto layout this table settled at a min-content
+   width of 1173px and simply stopped shrinking: at 1440 the last column,
+   VERDIKTAS — the answer the user came for — was cut off at the right edge of
+   its scroll container, and at every width below that more of the judgement
+   columns went with it. Fixed layout takes the widths declared below and wraps
+   the content instead, so the table is exactly as wide as the space it is
+   given, at any viewport, forever. Cards take over below 1240px (see the
+   responsive section) because below that these columns are too narrow to read,
+   not because the table would overflow. */
+.grid{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:fixed}
 .grid th{
-  text-align:left;padding:9px 12px;font-size:9.5px;text-transform:uppercase;
+  text-align:left;padding:9px 10px;font-size:9.5px;text-transform:uppercase;
   letter-spacing:.11em;color:var(--paper-dim);font-weight:600;
-  border-bottom:1px solid var(--rule);white-space:nowrap;
+  border-bottom:1px solid var(--rule);
 }
-.grid td{padding:9px 12px;border-bottom:1px solid rgba(42,50,59,.55);
-  vertical-align:middle}
+.grid td{padding:9px 10px;border-bottom:1px solid rgba(42,50,59,.55);
+  vertical-align:middle;overflow-wrap:anywhere}
+
+/* Candidate columns, in header order: Nr., Vietovė, Kaina, Vertinimo pjūvis,
+   Balas, Visi kaštai, Gamta, Atitikimas, Verdiktas. They must total 100%.
+   Weighted by what each column is for: NR./VIETOVĖ/KAINA identify the row, the
+   core sample is the one column that reads at a glance, GAMTA is dense and
+   valuable, and the three judgement columns on the right are the answer — so
+   VERDIKTAS is given room to hold its longest label, "Trumpasis sąrašas",
+   rather than being the column that pays for everyone else.
+   Adding a column here means re-splitting all nine; the count is pinned by
+   test_frontend_responsive.py. */
+#candTable th:nth-child(1){width:7%}    /* Nr. */
+#candTable th:nth-child(2){width:13%}   /* Vietovė */
+#candTable th:nth-child(3){width:8%}    /* Kaina */
+#candTable th:nth-child(4){width:13%}   /* Vertinimo pjūvis */
+#candTable th:nth-child(5){width:11%}   /* Balas */
+#candTable th:nth-child(6){width:9%}    /* Visi kaštai */
+#candTable th:nth-child(7){width:14%}   /* Gamta */
+#candTable th:nth-child(8){width:11%}   /* Atitikimas */
+#candTable th:nth-child(9){width:14%}   /* Verdiktas */
 .grid tbody tr{cursor:pointer;transition:background .1s ease}
 .grid tbody tr:hover{background:var(--panel-2)}
 .grid .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -151,7 +204,9 @@ h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
 .ref{font-family:var(--mono);color:var(--paper-dim);font-size:11.5px}
 .place{font-weight:500}
 .place small{display:block;color:var(--paper-dim);font-size:10.5px;font-weight:400}
-.core-col{width:190px}
+/* EUR per score point, under the score it is derived from. Same cell, because
+   on an unscored candidate they were two columns of the same em dash. */
+.per{display:block;color:var(--paper-dim);font-size:10.5px;font-weight:400}
 .muted{color:var(--paper-dim)}
 tr.is-archived{opacity:.42}
 
@@ -159,7 +214,10 @@ tr.is-archived{opacity:.42}
    Each candidate's score as a stratigraphy column: segment width = criterion
    weight, segment opacity = that criterion's 0–10 score. Change a weight and
    every column in the table re-stratifies. */
-.core{display:flex;height:19px;width:178px;border:1px solid var(--rule);
+/* Fluid, not a fixed 178px: its column is a percentage of the table now, and a
+   bar wider than its cell would push the whole row back out of the viewport. */
+.core{display:flex;height:19px;width:100%;max-width:178px;min-width:84px;
+  border:1px solid var(--rule);
   border-radius:1px;overflow:hidden;background:repeating-linear-gradient(
     90deg,transparent 0 3px,rgba(255,255,255,.03) 3px 4px)}
 .core i{display:block;height:100%;transition:width .22s ease,opacity .22s ease}
@@ -167,8 +225,12 @@ tr.is-archived{opacity:.42}
   font-size:9.5px;color:var(--paper-dim);letter-spacing:.09em}
 
 /* ---------------------------------------------------------------- verdicts */
+/* Wraps rather than refusing to. In a fixed-width column an unbreakable
+   "Trumpasis sąrašas" would spill past the cell and take the verdict back off
+   the right edge, which is the one thing this table must never do. Cards get
+   `nowrap` back — there the row is a full-width card with room to spare. */
 .tag{display:inline-block;padding:2px 8px;border-radius:2px;font-size:10.5px;
-  font-weight:600;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+  font-weight:600;text-transform:uppercase;letter-spacing:.06em;overflow-wrap:normal}
 .tag.shortlist{background:rgba(143,174,93,.17);color:var(--lichen)}
 .tag.weak{background:rgba(92,122,138,.19);color:var(--slate)}
 .tag.over_budget{background:rgba(200,152,58,.16);color:var(--ochre)}
@@ -242,9 +304,14 @@ tr.is-archived{opacity:.42}
 .ingest-bar{display:flex;align-items:center;justify-content:space-between;gap:9px;
   padding-top:10px;margin-top:6px;border-top:1px solid var(--rule)}
 .ingest-bar .stat-line{flex:1;min-width:0;line-height:1.35}
+/* overflow-wrap is reset because .grid td sets break-word as a safety net
+   against an unbreakable token overflowing a fixed-width column. On a short
+   label that safety net is the damage: at the narrowest table width it split
+   "Su infrastruktūra" into "infrastruktūr" and "a". Between words, never
+   inside one. */
 .chip{display:inline-block;padding:1px 6px;margin:0 4px 3px 0;border-radius:2px;
   background:rgba(143,174,93,.15);color:var(--lichen);font-size:10px;
-  font-family:var(--mono);letter-spacing:.03em}
+  font-family:var(--mono);letter-spacing:.03em;overflow-wrap:normal}
 .sep{border:none;border-top:1px solid var(--rule);margin:18px 0}
 .testrow{display:flex;gap:9px;align-items:baseline;padding:5px 0;
   border-bottom:1px solid rgba(42,50,59,.5);font-size:12px}
@@ -253,8 +320,12 @@ tr.is-archived{opacity:.42}
 .testrow.no{color:var(--paper-dim)}
 
 /* ------------------------------------------------------- nature + advice */
-.nat{font-family:var(--mono);font-size:11px;line-height:1.45;white-space:nowrap}
-.nat b{color:var(--paper)}
+/* Wraps too, for the same reason: nowrap made GAMTA a 305px column, a quarter
+   of the table, and pushed the judgement columns off the right edge. A figure
+   and its unit stay together — a "4.1" orphaned from its "km" is worse than a
+   wrapped line. */
+.nat{font-family:var(--mono);font-size:11px;line-height:1.45}
+.nat b{color:var(--paper);white-space:nowrap}
 .nat .w-lake{color:var(--slate)}
 .nat .w-river{color:#6b8f79}
 .nat .w-prot{color:var(--ochre)}
@@ -294,35 +365,30 @@ tr.is-archived{opacity:.42}
   max-width:min(520px,calc(100vw - 24px))}
 .toast.is-bad{border-left-color:var(--oxide)}
 
-/* ---------------------------------------------------------------- responsive */
-@media (max-width:1080px){
-  .shell{grid-template-columns:1fr}
-  .rail{position:static;max-height:none}
-  .tallies{order:3;width:100%;margin-left:0}
-}
-/* ------------------------------------------------------------------ phones
-   Below 700px the two tables stop being grids. Ten columns cannot be read on a
-   phone: horizontal scrolling shows four of them at a time and takes the row's
-   identity off-screen with the rest, which is precisely the context you need to
-   judge a candidate. Each row becomes a card and each cell prints the header it
-   lost, from the data-label app.js sets. The core sample survives the change —
-   it is the one column that still reads at a glance. */
-@media (max-width:700px){
-  /* A sticky bar that wraps to three rows costs a third of a phone screen and
-     never gives it back. Scroll it away here. */
-  .topbar{position:static;padding:12px 14px;gap:10px}
-  .status{width:100%;gap:8px}
-  .status .btn{flex:1 1 auto}
-  .shell{padding:12px;gap:12px}
-  .rail-block{padding:13px}
+/* ---------------------------------------------------------------- responsive
+   Three thresholds, widest first, because they are equal specificity and source
+   order decides:
+     1240px  rows stop being table rows and become cards
+     1080px  the rail stops being a column and stacks above the content
+      700px  handset: filters collapse, content comes first, controls grow
+      620px  narrowest handsets: paired fields go one per line              */
 
-  /* The status line now reports two ingestion paths plus a stale-robots
-     warning, so it runs longer than the button next to it. Wrapping lets the
-     button drop to its own full-width row below the text instead of the two
-     fighting over half the screen each. */
-  .ingest-bar{flex-wrap:wrap}
-  .ingest-bar .btn{flex:1 1 auto}
-
+/* ------------------------------------------------------------------- cards
+   Nine columns need about 880px to stay legible. Above 1240px the content
+   column is at least that wide and the table fits exactly, by construction —
+   table-layout:fixed hands each column a share of whatever width it is given.
+   Below 1240px it does not: at 1024 and at every tablet width the table used to
+   run past its container and the last columns — ATITIKIMAS and VERDIKTAS, the
+   answer the user came for — were unreachable without discovering a horizontal
+   scrollbar buried inside a panel. So the breakpoint moves up from 700px and
+   the card layout, which was already written and already good, covers every
+   viewport that is not a wide desktop.
+   Each row becomes a card and each cell prints the header it lost, from the
+   data-label app.js sets. The core sample survives the change — it is the one
+   column that still reads at a glance. Nothing is dropped: a card shows all
+   nine fields, which is the other reason to prefer cards over pinning the
+   identity columns and letting the rest scroll. */
+@media (max-width:1240px){
   .table-wrap{overflow-x:visible}
   .grid,.grid tbody,.grid tr,.grid td{display:block;width:auto}
   .grid thead{display:none}
@@ -343,9 +409,57 @@ tr.is-archived{opacity:.42}
   /* Long values wrap onto their own line instead of squeezing the label. */
   .grid td>*{min-width:0}
   .place small{text-align:right}
-  .nat{white-space:normal}
   small.miss{flex-basis:100%;text-align:right}
-  .core-col,.core{width:150px}
+  .tag{white-space:nowrap}
+  .per{display:inline;margin-left:8px}
+
+  /* Two cards abreast where there is room for them — a tablet showing one
+     card per row wastes half its width and doubles the scrolling. */
+  #candBody,#mktBody{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+  #candBody tr,#mktBody tr{align-self:start}
+}
+
+/* ----------------------------------------------------- the rail stops being
+   a column here and stacks above the content — and a stack of ten filter
+   controls above the candidates means opening the app to its controls and
+   scrolling past every one of them to reach the first property. So content
+   comes before its controls from this width down, not only on a handset: the
+   rail's blocks become grid items of the shell (display:contents drops the
+   <aside> box, not its contents; the landmark role survives in current
+   browsers), the collapsed filter summary keeps the top slot, and the weights,
+   profiles and assumptions drop below the candidates. app.js closes the
+   disclosure at this same width. */
+@media (max-width:1080px){
+  .shell{grid-template-columns:1fr}
+  .rail{display:contents}
+  .rail-block{order:3}
+  #filterPanel{order:1}
+  .content{order:2}
+  .tallies{order:3;width:100%;margin-left:0}
+}
+/* ------------------------------------------------------------------ phones */
+@media (max-width:700px){
+  /* One card per row again: two 170px-wide cards are unreadable. */
+  #candBody,#mktBody{display:block}
+
+  /* A sticky bar that wraps to three rows costs a third of a phone screen and
+     never gives it back. Scroll it away here. */
+  .topbar{position:static;padding:12px 14px;gap:10px}
+  .status{width:100%;gap:8px}
+  .status .btn{flex:1 1 auto}
+  .shell{padding:12px;gap:12px}
+  .rail-block{padding:13px}
+
+  /* The status line now reports two ingestion paths plus a stale-robots
+     warning, so it runs longer than the button next to it. Wrapping lets the
+     button drop to its own full-width row below the text instead of the two
+     fighting over half the screen each. */
+  .ingest-bar{flex-wrap:wrap}
+  .ingest-bar .btn{flex:1 1 auto}
+
+  /* The cards themselves are set up in the 1240px block above; a handset only
+     needs the core sample to give back the width it does not have. */
+  .core{max-width:150px}
 
   /* iOS Safari zooms the viewport whenever a focused control is smaller than
      16px, and does not zoom back out afterwards — one tap on a filter and the
@@ -379,13 +493,31 @@ tr.is-archived{opacity:.42}
 }
 
 /* Touch input, at any width — a coarse pointer needs a bigger target than a
-   mouse, and 30px rows are below what a thumb can hit reliably. */
+   mouse. 44px is the floor; the previous version of this block set padding and
+   font sizes that left buttons at 29px tall and every checkbox at 20x20.
+   Two ways of reaching 44px are used here, and the difference matters when you
+   measure. Buttons, tabs, fields and the disclosure summary are the target, so
+   they get min-height directly. A checkbox is not: it lives inside a <label>
+   that toggles it from anywhere along the row, so the target is the row and the
+   row is what gets sized — a 44x44 painted checkbox would be a disfiguring
+   green slab for no gain in reach. Measuring the input's own box therefore
+   still reports ~24px; measuring what the thumb actually lands on reports the
+   full width of the row by 44px. .prow is the exception — a div, not a label —
+   so app.js wraps its checkbox in a .ptoggle label to give it the same. */
 @media (pointer:coarse){
-  .btn{padding:10px 16px;font-size:13px}
-  .tab{padding:12px 13px;font-size:11.5px}
-  .check input,.prow input[type=checkbox],.frow input,.krow input{width:20px;height:20px}
-  .prow .pedit{padding:8px 6px;font-size:11px}
-  .srow input[type=range]{height:26px}
+  .btn{padding:10px 16px;font-size:13px;min-height:44px}
+  .tab{padding:12px 13px;font-size:11.5px;min-height:44px}
+  .check input,.prow input[type=checkbox],.frow input,.krow input{width:24px;height:24px}
+  .check,.frow,.krow,.prow{min-height:44px}
+  .ptoggle{display:flex;align-items:center;justify-content:center;flex:none;
+    min-width:44px;min-height:44px;margin:0 -7px 0 -11px;cursor:pointer}
+  .prow .pedit{padding:12px 10px;font-size:11px;min-height:44px;min-width:44px}
+  .field input,.field select{min-height:44px}
+  /* The weight and cost boxes are bare inputs in a grid row, with no label
+     wrapping them to inherit a target from — they have to carry their own. */
+  .wrow input,.crow input{min-height:44px}
+  .rail-block>summary{min-height:44px}
+  .srow input[type=range]{height:44px}
   .grid tbody tr{cursor:default}
 }
 
