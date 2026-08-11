@@ -2,8 +2,11 @@
    No framework, no build step. State lives on the server; this file renders it. */
 
 const $ = (id) => document.getElementById(id);
+// Base-relative, not `/api...`, so the app works mounted under a path prefix
+// (a reverse proxy stripping /sodyba) as well as at the root. Relies on the
+// page being loaded at a directory URL: serve /sodyba/, not /sodyba.
 const api = async (path, opts = {}) => {
-  const r = await fetch(`/api${path}`, {
+  const r = await fetch(`api${path}`, {
     headers: { 'Content-Type': 'application/json' }, ...opts,
   });
   if (r.status === 204) return null;
