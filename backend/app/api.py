@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 from datetime import date
+from statistics import median
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -177,6 +178,105 @@ def _next_ref() -> str:
     return f"K{n + 1:03d}"
 
 
+# ------------------------------------------------- asking price vs the peers
+#
+# WHAT THIS IS NOT: a valuation, an estimate, or a market price. These are
+# ASKING prices — what sellers on one classifieds portal (rinka.lt) hope to
+# get — compared against each other. An asking price is not a sale price:
+# K008 below has been asking 6 000 EUR since 2021-07-05 and has still not
+# sold, which is precisely how far the two can drift apart.
+#
+# WHY THERE IS NOTHING BETTER: Registrų centras publishes no transaction
+# prices as open data (README "Data reality"; AGENT.md section 4). The bailiff
+# portal reports sold lots only as a price band — literally the string "<6".
+# There are no free comps for Lithuania. The one per-object anchor that exists
+# is masvertinimas.registrucentras.lt, a mass-valuation figure you look up by
+# cadastral number, by hand, one property at a time; it is on the checks list
+# for exactly that reason and cannot be batched into this.
+#
+# So this answers one narrow question, and only that one: "is this advert
+# priced oddly compared with the other adverts I have collected?" The field is
+# named asking_vs_peers, never market_value, so that no caller and no screen
+# can quietly promote it into something it is not.
+#
+# A median over a handful of rows is noise wearing a number. Nothing at all is
+# computed below _PEER_MIN peers: same-municipality peers are preferred when
+# there are that many, otherwise the whole non-archived table is the basis —
+# and every answer states which basis it used and how many rows it saw, so a
+# ratio can be discounted by the reader rather than trusted blindly.
+_PEER_MIN = 5
+
+PEERS_NOTE = (
+    "Palyginama su kitų surinktų skelbimų PRAŠOMOMIS kainomis (rinka.lt). "
+    "Tai nėra turto vertinimas ir ne rinkos vertė: prašoma kaina nėra sandorio "
+    "kaina, o sandorių kainų Lietuvoje kaip atvirų duomenų nėra. "
+    f"Neskaičiuojama, kai palyginimui yra mažiau nei {_PEER_MIN} skelbimų."
+)
+
+
+def _per_unit(price: Any, size: Any) -> float | None:
+    """price / size, or None unless both are known and non-zero."""
+    if not price or not size:          # None, 0 and 0.0 all mean "cannot divide"
+        return None
+    return float(price) / float(size)
+
+
+def _peer_pool() -> list[dict[str, Any]]:
+    """Every non-archived candidate's per-unit asking prices, for the medians.
+
+    Read with its own query rather than reusing the caller's filtered rows, on
+    purpose: the medians must not move when the user narrows the view by price,
+    municipality or verdict. Otherwise one candidate's ratio would change
+    depending on which filter happened to be open, which is the kind of number
+    that quietly teaches you the wrong thing. Archived rows are excluded — they
+    are rejected properties, and a rejected asking price is not a peer.
+    """
+    with connect() as cx:
+        rows = cx.execute(
+            "SELECT id, municipality, price_eur, house_m2, plot_ares "
+            "FROM candidate WHERE archived=0").fetchall()
+    return [{"id": r["id"], "municipality": r["municipality"],
+             "eur_per_m2": _per_unit(r["price_eur"], r["house_m2"]),
+             "eur_per_are": _per_unit(r["price_eur"], r["plot_ares"])}
+            for r in rows]
+
+
+def _compare_to_peers(cid: int, municipality: str | None, value: float | None,
+                      metric: str, pool: list[dict[str, Any]]) -> dict[str, Any]:
+    """One metric against the median of the other candidates carrying it.
+
+    Always reports `basis` and `n`, because a ratio against a median of three
+    is not a weaker version of a ratio against a median of thirty — it is a
+    different claim, and the reader has to be able to tell them apart. Returns
+    a null ratio with a Lithuanian `reason` instead of a number whenever the
+    sample floor is not met on either basis.
+    """
+    empty = {"value": None, "median": None, "ratio": None, "basis": None, "n": 0}
+    if value is None:
+        return {**empty, "reason": "trūksta kainos arba dydžio"}
+
+    # The candidate is never in its own median: a row compared against a set
+    # containing itself is pulled towards a ratio of 1 by its own outlier.
+    others = [p for p in pool if p["id"] != cid and p[metric] is not None]
+    same_muni = [p[metric] for p in others
+                 if municipality and p["municipality"] == municipality]
+    everyone = [p[metric] for p in others]
+
+    if len(same_muni) >= _PEER_MIN:
+        peers, basis = same_muni, "municipality"
+    elif len(everyone) >= _PEER_MIN:
+        peers, basis = everyone, "all"
+    else:
+        return {**empty, "value": round(value, 2), "n": len(everyone),
+                "reason": (f"per mažai palyginamų skelbimų "
+                           f"({len(everyone)}, reikia {_PEER_MIN})")}
+
+    med = median(peers)
+    return {"value": round(value, 2), "median": round(med, 2),
+            "ratio": round(value / med, 2) if med else None,
+            "basis": basis, "n": len(peers), "reason": None}
+
+
 @router.get("/candidates")
 def list_candidates(
     municipality: Optional[str] = None,
@@ -218,6 +318,18 @@ def list_candidates(
         rows = cx.execute(sql, args).fetchall()
 
     items = [_row_to_candidate(r) for r in rows]
+
+    # One source of truth for the peer comparison: computed here, server-side,
+    # for every candidate the caller gets back. See _compare_to_peers and the
+    # block comment above it — these are asking prices, not valuations.
+    pool = _peer_pool()
+    for c in items:
+        c["eur_per_m2"] = _per_unit(c["price_eur"], c["house_m2"])
+        c["eur_per_are"] = _per_unit(c["price_eur"], c["plot_ares"])
+        c["asking_vs_peers"] = {
+            m: _compare_to_peers(c["id"], c["municipality"], c[m], m, pool)
+            for m in ("eur_per_m2", "eur_per_are")
+        }
 
     if profile:
         items = [c for c in items if profile in (c.get("profiles") or [])]
@@ -266,7 +378,8 @@ def list_candidates(
     counts: dict[str, int] = {}
     for c in items:
         counts[c["verdict"]] = counts.get(c["verdict"], 0) + 1
-    return {"items": items, "count": len(items), "by_verdict": counts}
+    return {"items": items, "count": len(items), "by_verdict": counts,
+            "asking_vs_peers_note": PEERS_NOTE}
 
 
 @router.post("/candidates", status_code=201)
