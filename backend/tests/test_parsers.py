@@ -217,3 +217,46 @@ def test_common_reports_the_municipality_that_actually_matched(text, expected):
 def test_municipality_from_returns_none_when_nothing_matches():
     assert parsers.municipality_from("Parduodama sodyba prie ežero") is None
     assert parsers.municipality_from("") is None
+
+
+# "raj" is a very common informal abbreviation alongside "r." and the
+# spelled-out "rajon-" forms, but until now MUNI_RE only accepted the latter
+# two. Two live rinka.lt listings polled 2026-08-10 were titled "Parduodama
+# Sodyba/vienkiemis Lazdijų raj, ..." and "... Telšių raj, ...", and both
+# missed a municipality entirely (a permissive gap: filters.evaluate skips
+# the check when municipality is None, and dedupe.is_duplicate's exact-match
+# identity gate can then never pair the listing with its twin from another
+# portal).
+
+@pytest.mark.parametrize("text,expected", [
+    ("Lazdijų raj.", "Lazdijų rajono"),
+    ("Lazdijų raj", "Lazdijų rajono"),
+    ("Telšių raj, Kalniškių Kaime", "Telšių rajono"),
+])
+def test_municipality_from_accepts_the_raj_abbreviation(text, expected):
+    assert parsers.municipality_from(text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    # Every form that already worked must keep working, unchanged, after
+    # "raj" is added to the alternation -- "raj" is a strict prefix of
+    # "rajon", so a naive ordering mistake could truncate a match rather
+    # than extend it.
+    ("Lazdijų r.", "Lazdijų rajono"),
+    ("Lazdijų rajone", "Lazdijų rajono"),
+    ("Lazdijų rajono", "Lazdijų rajono"),
+    ("Alytaus r. sav.", "Alytaus rajono"),
+    ("Vilniaus m. sav.", "Vilniaus miesto"),
+])
+def test_municipality_from_existing_forms_are_unaffected_by_the_raj_fix(text, expected):
+    assert parsers.municipality_from(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    # "raj" is short, so check it cannot fire on ordinary prose that merely
+    # happens to contain those three letters without meaning "rajonas".
+    "Garažas",
+    "Kraujas",
+])
+def test_municipality_from_the_raj_abbreviation_does_not_fire_on_unrelated_words(text):
+    assert parsers.municipality_from(text) is None

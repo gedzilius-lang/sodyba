@@ -28,7 +28,17 @@ PRICE_RE = re.compile(
 AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:kv\.?\s*m|m2|m²)", re.I)
 PLOT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:a\b|ar[ųu]|arai|aro)", re.I)
 HA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*ha\b", re.I)
-MUNI_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:r\.|rajon)", re.U)
+# "raj" is a common informal abbreviation alongside "r." and the spelled-out
+# "rajon-" forms (rajone/rajono/rajonas) -- e.g. "Lazdijų raj." and even the
+# bare "Lazdijų raj" with no period at all, both seen on live rinka.lt
+# listings. "raj" is a strict prefix of "rajon", so ordering the alternatives
+# would only matter if the chosen branch's matched text fed back into the
+# result -- it doesn't: municipality_from() always reformats to "X rajono"
+# off of group(1) alone, and group(1) (the place name) is already fixed by
+# the time the branch is tried, since \s* has nothing left to backtrack once
+# it reaches the non-letter boundary before "r"/"raj"/"rajon". Kept in this
+# order (most-specific literal first) as the readable convention regardless.
+MUNI_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:r\.|raj\.?|rajon)", re.U)
 CITY_RE = re.compile(r"([A-ZĄČĘĖĮŠŲŪŽ][a-ząčęėįšųūž]+)\s*(?:m\.\s*sav|miesto sav)", re.U)
 # A bailiff notice carries "Vykdomoji byla Nr. 0157/2024:12" before the real
 # "Kadastro Nr. 4152/0007:96", and both fit the bare shape. Leftmost-match

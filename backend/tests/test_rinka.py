@@ -113,6 +113,17 @@ def test_parse_detail_still_reads_a_district_from_the_heading():
     assert rinka.parse_detail(html, URL)["municipality"] == "Ignalinos rajono"
 
 
+def test_parse_detail_reads_a_district_from_the_raj_abbreviation_in_the_heading():
+    # Live rinka.lt listings polled 2026-08-10 titled "Parduodama
+    # Sodyba/vienkiemis Lazdijų raj, ..." -- this is the actual path those
+    # listings take (heading -> parsers.municipality_from), not a synthetic
+    # regex-only case.
+    html = ('<html><body><h1>Parduodama Sodyba/vienkiemis Lazdijų raj, Some Place</h1>'
+            '<div class="description">Sklypas 30 arų.</div>'
+            '<span class="price">Kaina: 17000,00 &euro;</span></body></html>')
+    assert rinka.parse_detail(html, URL)["municipality"] == "Lazdijų rajono"
+
+
 # A rinka.lt listing page also renders the same seller's other adverts below
 # the main listing, each with its own place name. LOCALITY_RE.search takes
 # the first match in the text, so an unbounded slice can hand this listing a
