@@ -666,10 +666,13 @@ function summarisePoll(result) {
   }).join(', ');
 }
 
-// POST /api/ingest/mailbox answers {status: "ok", created, scanned, rejected}
-// or {status: "skipped", reason} when SR_IMAP_* is blank, or {status: "error",
-// error}. "skipped" is an intended state on a deployment with no alert
-// mailbox — it must never be reported the same way as "error".
+// POST /api/ingest/mailbox answers {status: "ok", created, scanned, rejected,
+// unknown, failed} or {status: "skipped", reason} when SR_IMAP_* is blank, or
+// {status: "error", error}. "skipped" is an intended state on a deployment
+// with no alert mailbox — it must never be reported the same way as "error".
+// `unknown` (messages from a sender naming no portal) and `failed` (messages
+// that could not be read) do not make a run an error and are not toasted:
+// they are in the refresh_log line the status bar below already prints.
 function summariseMailbox(r) {
   if (r.status === 'skipped') return 'paštas: neįjungtas';
   if (r.status === 'error') return r.error ? `paštas: klaida (${r.error})` : 'paštas: klaida';
