@@ -123,9 +123,9 @@ listing matching no enabled profile is discarded and never reaches the table.
 
 | Profile | Looks for | Default |
 |---|---|---|
-| **Miško vienkiemis** | Forest belt + Anykščiai/Molėtai, 3–20k, ≥30 a, ≥40 m² | on |
+| **Miško vienkiemis** | Forest belt (Dzūkija, Aukštaitija, Žemaitija), 3–20k, ≥30 a, ≥40 m² | on |
 | **Ežero ar upės pakrantė** | Lake belt, lake ≤1.5 km and ≥5 ha | on |
-| **Su infrastruktūra** | The five municipalities where utilities actually exist | on |
+| **Su infrastruktūra** | The twelve municipalities where utilities actually exist, ranked by the NTR data | on |
 | **Varžytynių medžioklė** | Auctions only, nationwide, 1–15k | on |
 | **Pigiausias fondas** | Cheapest districts — worse infrastructure, more risk | off |
 

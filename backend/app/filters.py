@@ -71,15 +71,65 @@ class ProfileMatch:
                 "misses": [vars(m) for m in self.misses]}
 
 # Municipalities ranked by rarity index (share with utilities x share pre-1945),
-# computed from the NTR open data.
-HIGH_UTILITY = ["Ukmergės rajono", "Utenos rajono", "Anykščių rajono",
-                "Molėtų rajono", "Rokiškio rajono"]
-LAKE_BELT = ["Ignalinos rajono", "Zarasų rajono", "Molėtų rajono",
-             "Švenčionių rajono", "Utenos rajono"]
-FOREST_BELT = ["Varėnos rajono", "Lazdijų rajono", "Švenčionių rajono",
-               "Šalčininkų rajono", "Trakų rajono"]
-CHEAPEST = ["Šalčininkų rajono", "Kelmės rajono", "Zarasų rajono",
-            "Ignalinos rajono", "Biržų rajono"]
+# computed from the NTR open data. This is the one list that is measured, not
+# chosen: the cut is the observed break in the ranking (4.83 down to 3.85 after
+# 12th place), not a round number. Šalčininkų (2.26, 8.3% utilities) is
+# deliberately excluded even though it is geographically close to several of
+# these — that low-utilities/high-forest contrast is exactly what this profile
+# is built to avoid. Do not extend this list by intuition; re-run the ranking.
+HIGH_UTILITY = [
+    "Ukmergės rajono",    # 9.84
+    "Utenos rajono",      # 9.36
+    "Anykščių rajono",    # 7.33
+    "Zarasų rajono",      # 7.02
+    "Molėtų rajono",      # 6.80
+    "Ignalinos rajono",   # 5.44
+    "Širvintų rajono",    # 5.44
+    "Varėnos rajono",     # 5.20
+    "Prienų rajono",      # 5.16
+    "Rokiškio rajono",    # 5.10
+    "Švenčionių rajono",  # 4.83
+    "Trakų rajono",       # 4.83
+]
+
+# Lithuania's forested belt, geographic (not measured): three contiguous
+# regions, each commented so a later addition can be judged against the same
+# logic rather than dropped in by feel.
+FOREST_BELT = [
+    # Dzūkija pine forests (south) — Varėna/Dainava forest, Kazlų Rūda-adjacent
+    # Nemunas-loop woods around Prienai/Birštonas.
+    "Varėnos rajono", "Lazdijų rajono", "Šalčininkų rajono", "Trakų rajono",
+    "Alytaus rajono", "Druskininkų", "Prienų rajono", "Birštono",
+    # Aukštaitija forests (northeast) — Labanoras forest and the Aukštaitija
+    # national park woodland.
+    "Švenčionių rajono", "Ignalinos rajono", "Zarasų rajono", "Utenos rajono",
+    "Anykščių rajono", "Molėtų rajono",
+    # Žemaitija forests (west) — Žemaitija national park and the moraine-hill
+    # woods toward the coast.
+    "Plungės rajono", "Telšių rajono", "Kretingos rajono", "Skuodo rajono",
+    "Rietavo", "Šilalės rajono",
+]
+
+# Lake country, geographic: the Aukštaitija lake district in full, plus the
+# Dzūkija lakes in the south.
+LAKE_BELT = [
+    # Aukštaitija lake district
+    "Ignalinos rajono", "Zarasų rajono", "Molėtų rajono", "Švenčionių rajono",
+    "Utenos rajono", "Anykščių rajono", "Rokiškio rajono", "Kupiškio rajono",
+    "Biržų rajono", "Trakų rajono", "Vilniaus rajono",
+    # Dzūkija lakes (south)
+    "Varėnos rajono", "Lazdijų rajono", "Druskininkų", "Alytaus rajono",
+]
+
+# Genuinely cheap northern and western districts. Deliberately disjoint from
+# HIGH_UTILITY — a municipality that ranks high on the rarity index has no
+# business in the "cheapest and worst-served" profile.
+CHEAPEST = [
+    "Šalčininkų rajono", "Kelmės rajono", "Biržų rajono",
+    "Pasvalio rajono", "Pakruojo rajono", "Joniškio rajono",
+    "Radviliškio rajono", "Akmenės rajono",
+    "Skuodo rajono", "Šilalės rajono", "Jurbarko rajono",
+]
 
 WATER_WORDS = ["ežer", "upė", "upel", "prie vandens", "pakrant", "tvenkin", "kranto"]
 FOREST_WORDS = ["mišk", "giri", "vienkiem", "sodyb"]
@@ -95,11 +145,12 @@ PRESETS: list[dict[str, Any]] = [
     {
         "key": "forest_homestead",
         "name": "Miško vienkiemis",
-        "note": "Sodyba miško apsuptyje, su elektra. Dzūkijos ir Aukštaitijos girios.",
+        "note": "Sodyba miško apsuptyje, su elektra. Dzūkijos, Aukštaitijos ir "
+                "Žemaitijos girios.",
         "enabled": True,
         "min_price": 3000, "max_price": 20000,
         "min_plot_ares": 30, "min_house_m2": 40,
-        "municipalities": FOREST_BELT + ["Anykščių rajono", "Molėtų rajono"],
+        "municipalities": FOREST_BELT,
         "require_any": [{"name": "miškas", "words": FOREST_WORDS}],
         "require_all": [],
         "exclude_any": JUNK_WORDS,
