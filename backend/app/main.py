@@ -22,6 +22,17 @@ from . import notify
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+
+# httpx logs every request at INFO, including the full URL. notify.py addresses
+# Telegram as api.telegram.org/bot<TOKEN>/sendMessage, so the bot token is IN the
+# path: left at INFO, every push writes a live credential into the service log,
+# where it persists for the life of the journal. The upstream layers we poll are
+# keyless, so this costs nothing today and forecloses the leak the moment
+# SR_TELEGRAM_TOKEN is set. Failures are unaffected — they raise, and callers log
+# them with the context that actually helps.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 log = logging.getLogger("sodyba-radar")
 
 
