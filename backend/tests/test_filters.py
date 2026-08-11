@@ -282,6 +282,87 @@ def test_match_all_still_excludes_near_misses():
     assert f.match_all({**GOOD, "price_eur": 21000}, [PROFILE]) == []
 
 
+def test_require_any_matches_a_keyword_found_only_in_the_raw_description():
+    # `raw` is what every ingest path actually sets pre-storage (rinka.py,
+    # mailbox.poll_mailbox, api.test_profiles) — the title alone never
+    # mentions utilities, so this is the shape a real listing arrives in.
+    p = {**PROFILE, "require_any": [{"name": "komunikacijos", "words": f.UTILITY_WORDS}]}
+    listing = {**GOOD, "title": "Graži sodyba",
+               "raw": "Yra elektra ir gręžinys sklype."}
+    r = f.evaluate(listing, p)
+    assert r.state == f.MATCH
+
+
+def test_require_any_treats_notes_the_same_as_raw():
+    # `notes` is the post-storage column name for the same text; evaluate()
+    # is called at both stages and must behave identically either way.
+    p = {**PROFILE, "require_any": [{"name": "komunikacijos", "words": f.UTILITY_WORDS}]}
+    listing = {**GOOD, "title": "Graži sodyba",
+               "notes": "Yra elektra ir gręžinys sklype."}
+    r = f.evaluate(listing, p)
+    assert r.state == f.MATCH
+
+
+GARAZ_PROFILE = {**PROFILE, "exclude_any": f.JUNK_WORDS}
+
+
+def test_exclude_any_ignores_garazas_in_the_description():
+    # "Kitos patalpos: ... garažas" describes what the property HAS, not
+    # what it IS — the opposite of the title-only signal exclude_any exists
+    # to catch (a listing FOR a garage).
+    listing = {**GOOD, "title": "Sodyba su ūkiniais pastatais",
+               "raw": "Kitos patalpos: sandėliukas, garažas."}
+    r = f.evaluate(listing, GARAZ_PROFILE)
+    assert r.state == f.MATCH
+    assert not any(m.field == "exclude_any" for m in r.misses)
+
+
+def test_exclude_any_still_rejects_garazas_in_the_title():
+    listing = {**GOOD, "title": "Parduodamas garažas"}
+    r = f.evaluate(listing, GARAZ_PROFILE)
+    assert r.state == f.REJECT
+    assert [m.kind for m in r.misses if m.field == "exclude_any"] == [f.HARD]
+
+
+def test_exclude_any_ignores_dalis_in_the_description():
+    # e.g. a video caption "Pirma dalis" (part one) inside the body text —
+    # not a fractional-share listing.
+    listing = {**GOOD, "title": "Sodyba prie miško",
+               "raw": "Žiūrėkite vaizdo įrašą: Pirma dalis."}
+    r = f.evaluate(listing, PROFILE)
+    assert r.state == f.MATCH
+    assert not any(m.field == "exclude_any" for m in r.misses)
+
+
+def test_exclude_any_still_rejects_dalis_in_the_title():
+    r = f.evaluate({**GOOD, "title": "Parduodama dalis sodybos"}, PROFILE)
+    assert r.state == f.REJECT
+    assert [m.kind for m in r.misses if m.field == "exclude_any"] == [f.HARD]
+
+
+def test_listing_with_neither_raw_nor_notes_behaves_as_before():
+    # Regression guard for the mailbox path shape where the description key
+    # is genuinely absent (should never happen post-fix, but must not crash
+    # or change unrelated behaviour if it does).
+    p = {**PROFILE, "require_any": [{"name": "komunikacijos", "words": f.UTILITY_WORDS}]}
+    listing = {**GOOD, "title": "Graži sodyba"}
+    assert "raw" not in listing and "notes" not in listing
+    r = f.evaluate(listing, p)
+    m = next(x for x in r.misses if x.field == "require_any")
+    assert m.kind == f.HARD
+
+
+def test_require_all_also_reads_the_description():
+    p = {**PROFILE, "require_all": ["elektra"]}
+    listing = {**GOOD, "title": "Graži sodyba", "raw": "Yra elektra sklype."}
+    r = f.evaluate(listing, p)
+    assert not any(m.field == "require_all" for m in r.misses)
+
+    missing = {**GOOD, "title": "Graži sodyba", "raw": "Nėra jokių komunikacijų."}
+    r2 = f.evaluate(missing, p)
+    assert any(m.field == "require_all" for m in r2.misses)
+
+
 def test_a_soft_miss_without_a_delta_can_never_be_near():
     """delta is None means "how far outside is unknown". _state must reject
     on that rather than let it through as a near miss: showing a listing in

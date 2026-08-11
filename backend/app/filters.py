@@ -252,10 +252,36 @@ def evaluate(listing: dict[str, Any], profile: dict[str, Any]) -> ProfileMatch:
     if not profile.get("enabled", True):
         return ProfileMatch(key, REJECT, [Miss("enabled", HARD, "profilis išjungtas")])
 
-    hay = " ".join(filter(None, [
-        _norm(listing.get("title")), _norm(listing.get("notes")),
+    # Two haystacks, deliberately: title/locality/municipality (hay_title) and
+    # that plus the description (hay_full). `notes` is only populated after a
+    # row is written — every ingest path hands evaluate() the pre-storage
+    # `raw` key instead (adapters/rinka.py, mailbox.poll_mailbox,
+    # api.test_profiles), so a single haystack built from "notes" silently
+    # searched the title alone for the entire lifetime of this filter.
+    # Measured against the 19 live candidates that mattered for
+    # require_any/require_all: "komunikacijos" (elektra/gręžinys/šulinys/
+    # vandentiekis) matched 0 listings on title alone vs. 15 once the
+    # description was included; "vanduo" (ežeras/upė) went 0 -> 5. The
+    # shipped `utilities_first` preset requires "komunikacijos" and so was
+    # incapable of ever matching anything, because that vocabulary lives in
+    # the body, not the title.
+    #
+    # exclude_any stays on hay_title only. Checked what including the
+    # description would do to exclude_any specifically: it would reject 12 of
+    # the 19 live candidates, and every one was a false positive — "1/4"/
+    # "1/3"/"1/2" hitting the photo-count caption ("Visos nuotraukos (1/4)"),
+    # "dalis" hitting a video title ("Pirma dalis"), "garaž" hitting a
+    # features list ("Kitos patalpos: ... garažas"). JUNK_WORDS describes what
+    # a listing IS (a garage, a flat, a half-share), and that is what the
+    # title states; the same words in a description describe what the
+    # property HAS, which is the opposite signal — a homestead with a garage
+    # is a better homestead, not a disqualified one.
+    hay_title = " ".join(filter(None, [
+        _norm(listing.get("title")),
         _norm(listing.get("locality")), _norm(listing.get("municipality")),
     ]))
+    description = listing.get("notes") or listing.get("raw")
+    hay_full = " ".join(filter(None, [hay_title, _norm(description)]))
 
     src = listing.get("source")
     allowed = profile.get("sources") or []
@@ -288,14 +314,14 @@ def evaluate(listing: dict[str, Any], profile: dict[str, Any]) -> ProfileMatch:
         soft("house_m2", f"plotas {area:.0f} m2 < {need_area:.0f} m2", need_area - area)
 
     for w in profile.get("exclude_any") or []:
-        if w.lower() in hay:
+        if w.lower() in hay_title:
             hard("exclude_any", f"rastas draudžiamas žodis „{w}“")
 
     for w in profile.get("require_all") or []:
-        if w.lower() not in hay:
+        if w.lower() not in hay_full:
             hard("require_all", f"trūksta privalomo žodžio „{w}“")
 
-    misses.extend(_keyword_misses(hay, profile))
+    misses.extend(_keyword_misses(hay_full, profile))
     misses.extend(_radius_misses(listing, profile))
     misses.extend(_nature_misses(listing, profile))
 
