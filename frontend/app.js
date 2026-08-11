@@ -144,33 +144,43 @@ async function loadCandidates() {
     if (c.match_state === 'near') tr.classList.add('is-near');
     tr.onclick = () => openDrawer(c);
 
-    const td = (html, cls) => {
+    // The third argument is the column's header text. Below 700px the table
+    // becomes one card per row and the <thead> is hidden, so each cell has to
+    // carry its own label — styles.css prints it from data-label. Keep these
+    // identical to the <th> in index.html; test_frontend_responsive.py fails
+    // if they drift, because a card labelled differently from the table it
+    // replaces is worse than no label at all.
+    const td = (html, cls, label) => {
       const d = document.createElement('td');
       if (cls) d.className = cls;
+      if (label) d.dataset.label = label;
       if (html instanceof Node) d.appendChild(html); else d.innerHTML = html;
       return d;
     };
-    tr.appendChild(td(`<span class="ref">${esc(c.ref)}</span>`));
+    tr.appendChild(td(`<span class="ref">${esc(c.ref)}</span>`, null, 'Nr.'));
     const chips = (c.profiles || [])
       .map((k) => `<span class="chip">${esc(profileName(k))}</span>`).join('') + duplicateChip(c.notes);
     tr.appendChild(td(
       `<span class="place">${esc(c.locality || c.title || '—')}` +
-      `<small>${esc(c.municipality || '')} · ${esc(c.source)}</small>${chips}</span>`));
-    tr.appendChild(td(fmt(c.price_eur), 'num'));
-    tr.appendChild(td(coreBar(c)));
-    tr.appendChild(td(c.weighted_score === null ? '—' : c.weighted_score.toFixed(2), 'num'));
-    tr.appendChild(td(fmt(c.total_cost), 'num'));
-    tr.appendChild(td(natureCell(c)));
-    tr.appendChild(td(fmt(c.eur_per_point), 'num'));
+      `<small>${esc(c.municipality || '')} · ${esc(c.source)}</small>${chips}</span>`,
+      null, 'Vietovė'));
+    tr.appendChild(td(fmt(c.price_eur), 'num', 'Kaina'));
+    tr.appendChild(td(coreBar(c), null, 'Vertinimo pjūvis'));
+    tr.appendChild(td(c.weighted_score === null ? '—' : c.weighted_score.toFixed(2), 'num', 'Balas'));
+    tr.appendChild(td(fmt(c.total_cost), 'num', 'Visi kaštai'));
+    tr.appendChild(td(natureCell(c), null, 'Gamta'));
+    tr.appendChild(td(fmt(c.eur_per_point), 'num', 'EUR/tšk.'));
     const misses = Object.values(c.misses || {}).flat();
     const why = misses.map((m) => m.text).join(' · ');
     tr.appendChild(td(
       `<span class="tag ${c.match_state}" title="${esc(why)}">` +
       `${MATCH_LT[c.match_state] || c.match_state}</span>` +
       (c.match_state === 'near' && why
-        ? `<small class="miss">${esc(why)}</small>` : '')));
+        ? `<small class="miss">${esc(why)}</small>` : ''),
+      null, 'Atitikimas'));
     tr.appendChild(td(
-      `<span class="tag ${c.verdict}" title="${esc(c.verdict_reason)}">${VERDICT_LT[c.verdict]}</span>`));
+      `<span class="tag ${c.verdict}" title="${esc(c.verdict_reason)}">${VERDICT_LT[c.verdict]}</span>`,
+      null, 'Verdiktas'));
     body.appendChild(tr);
   });
 
@@ -194,14 +204,15 @@ async function loadMarket() {
   data.items.forEach((m) => {
     const tr = document.createElement('tr');
     tr.style.cursor = 'default';
+    // data-label mirrors this table's <th>; see the note on the candidate rows.
     tr.innerHTML =
-      `<td>${esc(m.municipality)}</td>` +
-      `<td class="num">${fmt(m.total)}</td>` +
-      `<td class="num">${fmt(m.power_and_water)}</td>` +
-      `<td class="num">${(m.pct_power_water * 100).toFixed(1)}%</td>` +
-      `<td class="num">${(m.pct_pre_1945 * 100).toFixed(1)}%</td>` +
-      `<td class="num">${fmt(m.log_walls)}</td>` +
-      `<td class="num">${m.rarity_index.toFixed(2)}</td>`;
+      `<td data-label="Savivaldybė">${esc(m.municipality)}</td>` +
+      `<td class="num" data-label="Vienbučiai">${fmt(m.total)}</td>` +
+      `<td class="num" data-label="Elektra+vanduo">${fmt(m.power_and_water)}</td>` +
+      `<td class="num" data-label="% el.+vand.">${(m.pct_power_water * 100).toFixed(1)}%</td>` +
+      `<td class="num" data-label="% iki 1945">${(m.pct_pre_1945 * 100).toFixed(1)}%</td>` +
+      `<td class="num" data-label="Rąstiniai">${fmt(m.log_walls)}</td>` +
+      `<td class="num" data-label="Retumo indeksas">${m.rarity_index.toFixed(2)}</td>`;
     body.appendChild(tr);
   });
   const when = data.last_refresh && data.last_refresh.ended_at;

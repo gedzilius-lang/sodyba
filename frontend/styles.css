@@ -270,9 +270,13 @@ tr.is-archived{opacity:.42}
 .act:before{content:"→";position:absolute;left:0;color:var(--lichen)}
 
 /* ---------------------------------------------------------------- toast */
+/* max-width is viewport-bounded, not a bare 520px: a long error message on a
+   360px phone would otherwise be wider than the screen and, being centred on
+   left:50%, would push the page into horizontal scrolling. */
 .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:80;
   background:var(--panel-2);border:1px solid var(--rule);border-left:3px solid var(--lichen);
-  border-radius:var(--r);padding:10px 16px;font-size:12.5px;max-width:520px}
+  border-radius:var(--r);padding:10px 16px;font-size:12.5px;
+  max-width:min(520px,calc(100vw - 24px))}
 .toast.is-bad{border-left-color:var(--oxide)}
 
 /* ---------------------------------------------------------------- responsive */
@@ -281,11 +285,88 @@ tr.is-archived{opacity:.42}
   .rail{position:static;max-height:none}
   .tallies{order:3;width:100%;margin-left:0}
 }
+/* ------------------------------------------------------------------ phones
+   Below 700px the two tables stop being grids. Ten columns cannot be read on a
+   phone: horizontal scrolling shows four of them at a time and takes the row's
+   identity off-screen with the rest, which is precisely the context you need to
+   judge a candidate. Each row becomes a card and each cell prints the header it
+   lost, from the data-label app.js sets. The core sample survives the change —
+   it is the one column that still reads at a glance. */
+@media (max-width:700px){
+  /* A sticky bar that wraps to three rows costs a third of a phone screen and
+     never gives it back. Scroll it away here. */
+  .topbar{position:static;padding:12px 14px;gap:10px}
+  .status{width:100%;gap:8px}
+  .status .btn{flex:1 1 auto}
+  .shell{padding:12px;gap:12px}
+  .rail-block{padding:13px}
+
+  .table-wrap{overflow-x:visible}
+  .grid,.grid tbody,.grid tr,.grid td{display:block;width:auto}
+  .grid thead{display:none}
+  .grid tr{background:var(--panel-2);border:1px solid var(--rule);
+    border-radius:var(--r);margin:0 0 10px}
+  .grid tbody tr:hover{background:var(--panel-2)}
+  .grid td{
+    display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;
+    gap:6px 14px;padding:7px 12px;text-align:right;
+    border-bottom:1px solid rgba(42,50,59,.55);
+  }
+  .grid tr td:last-child{border-bottom:none}
+  .grid td[data-label]:before{
+    content:attr(data-label);flex:none;text-align:left;
+    font-size:9.5px;text-transform:uppercase;letter-spacing:.11em;
+    color:var(--paper-dim);font-weight:600;
+  }
+  /* Long values wrap onto their own line instead of squeezing the label. */
+  .grid td>*{min-width:0}
+  .place small{text-align:right}
+  .nat{white-space:normal}
+  small.miss{flex-basis:100%;text-align:right}
+  .core-col,.core{width:150px}
+
+  /* iOS Safari zooms the viewport whenever a focused control is smaller than
+     16px, and does not zoom back out afterwards — one tap on a filter and the
+     whole console is off-screen. Only the controls need the bump; the rest of
+     the interface can stay dense. */
+  .field input,.field select,.field textarea,
+  .wrow input,.crow input,.srow input{font-size:16px}
+  .wrow{grid-template-columns:1fr 62px}
+
+  /* Score rows: label and value on one line, the slider full-width beneath,
+     instead of three columns fighting over 335px. */
+  .srow{grid-template-columns:1fr auto;grid-template-areas:"lab val" "rng rng";
+    gap:4px 11px}
+  .srow label{grid-area:lab}
+  .srow input[type=range]{grid-area:rng;width:100%}
+  .srow .val{grid-area:val}
+
+  /* Rows that assume a wide viewport: let them wrap rather than overflow. */
+  .testrow{flex-wrap:wrap}
+  .testrow b{min-width:0}
+  .krow{flex-wrap:wrap}
+  .krow a{margin-left:0}
+  .drawer-foot{flex-wrap:wrap;gap:9px}
+  .drawer-head,.drawer-body,.drawer-foot{padding-left:14px;padding-right:14px}
+}
+
+/* Narrowest phones. This block sits after the 700px one on purpose: both apply
+   below 620px, they carry equal specificity, and source order decides. */
 @media (max-width:620px){
   .grid2,.field-row{grid-template-columns:1fr}
-  .core-col,.core{width:120px}
-  .topbar{gap:12px}
 }
+
+/* Touch input, at any width — a coarse pointer needs a bigger target than a
+   mouse, and 30px rows are below what a thumb can hit reliably. */
+@media (pointer:coarse){
+  .btn{padding:10px 16px;font-size:13px}
+  .tab{padding:12px 13px;font-size:11.5px}
+  .check input,.prow input[type=checkbox],.frow input,.krow input{width:20px;height:20px}
+  .prow .pedit{padding:8px 6px;font-size:11px}
+  .srow input[type=range]{height:26px}
+  .grid tbody tr{cursor:default}
+}
+
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }
