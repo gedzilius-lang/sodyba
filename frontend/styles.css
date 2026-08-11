@@ -22,6 +22,20 @@
 
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
+
+/* The `hidden` attribute must win over anything in this file.
+   The user agent's own rule is `[hidden]{display:none}` — a bare attribute
+   selector, specificity 0,1,0 — so *any* class or id rule that sets `display`
+   silently outranks it. `.drawer{display:flex}` did exactly that, and the
+   detail drawer was never once hidden in this project's life: the app opened
+   with an empty "Naujas objektas" form over half a desktop screen and all of a
+   phone, with the candidate table underneath it and untappable.
+   One defensive rule rather than a fix on `.drawer`, because the trap is a
+   class of bug, not an incident — it applies to #scrim, #toast and #candEmpty
+   today and to whatever carries the attribute next. Nothing in app.js reveals
+   an element by writing style.display, so !important costs nothing here.
+   test_frontend_hidden_attribute.py fails if a rule ever outranks this. */
+[hidden]{display:none!important}
 body{
   background:var(--ink);color:var(--paper);
   font-family:var(--sans);font-size:14px;line-height:1.5;
