@@ -369,33 +369,77 @@ parse_domoplius = _classified("domoplius", "domoplius.lt")
 parse_alio = _classified("alio", "alio.lt")
 parse_skelbiu = _classified("skelbiu", "skelbiu.lt")
 parse_rinka = _classified("rinka", "rinka.lt")
+# kampas.lt is a classifieds portal like the four above — one advert per block,
+# an asking price, no auction mechanics — so it gets the shared _classified
+# extractor and nothing else. It is ALERT_ONLY in registry.py (/robots.txt
+# returns 403), and until now it had no parser and no route at all: an alert
+# from it would have fallen through to parse_generic and been stored as
+# "manual", i.e. as something a human pasted. Nothing about its format calls
+# for a bespoke parser; what it will need, like every other portal here, is
+# tightening against a real alert once one arrives.
+parse_kampas = _classified("kampas", "kampas.lt")
 
-# sender-domain / subject fragment -> parser
-ROUTES: list[tuple[str, Callable[[str], dict[str, Any]]]] = [
-    ("evarzytynes.lt", parse_evarzytynes),
-    ("registrucentras.lt", parse_evarzytynes),
-    ("turtas.lt", parse_turtas),
-    ("aruodas.lt", parse_aruodas),
-    ("domoplius.lt", parse_domoplius),
-    ("alio.lt", parse_alio),
-    ("skelbiu.lt", parse_skelbiu),
-    ("rinka.lt", parse_rinka),
-]
-
-# Declared source key -> parser. ROUTES is keyed on domain fragments, which a
-# caller that already knows the portal ("evarzytynes") cannot match against;
-# this is the mapping for that caller. Sniffing the text is a guess, and on an
-# auction notice a wrong guess is the difference between the starting price
-# and the market valuation — 25000 against 40000 on the same property.
+# Declared source key -> parser. ROUTES below is keyed on domain fragments,
+# which a caller that already knows the portal ("evarzytynes") cannot match
+# against; this is the mapping for that caller. Sniffing the text is a guess,
+# and on an auction notice a wrong guess is the difference between the starting
+# price and the market valuation — 25000 against 40000 on the same property.
 BY_SOURCE: dict[str, Callable[[str], dict[str, Any]]] = {
     "evarzytynes": parse_evarzytynes,
     "turtas": parse_turtas,
     "aruodas": parse_aruodas,
     "domoplius": parse_domoplius,
+    "kampas": parse_kampas,
     "alio": parse_alio,
     "skelbiu": parse_skelbiu,
     "rinka": parse_rinka,
 }
+
+# Sender-domain / subject fragment -> the source key it names. One table with
+# two readers: ROUTES turns it into parsers for the paste path, and
+# source_for_alert() answers "whose alert is this?" for the mailbox path.
+# Keeping them derived from one list is what stops a portal from being
+# routable to a parser while being unnameable as a source, or the reverse.
+ALERT_SENDERS: list[tuple[str, str]] = [
+    ("evarzytynes.lt", "evarzytynes"),
+    ("registrucentras.lt", "evarzytynes"),
+    ("turtas.lt", "turtas"),
+    ("aruodas.lt", "aruodas"),
+    ("domoplius.lt", "domoplius"),
+    ("kampas.lt", "kampas"),
+    ("alio.lt", "alio"),
+    ("skelbiu.lt", "skelbiu"),
+    ("rinka.lt", "rinka"),
+]
+
+ROUTES: list[tuple[str, Callable[[str], dict[str, Any]]]] = [
+    (needle, BY_SOURCE[key]) for needle, key in ALERT_SENDERS
+]
+
+
+def source_for_alert(sender: str, subject: str = "") -> str | None:
+    """The portal an alert email's own headers name, or None. PURE.
+
+    Deliberately narrower than route(): it reads the From header (address and
+    display name both — portals send through ESPs, so "Aruodas.lt"
+    <no-reply@some-esp.net> is normal) and the subject, and never the body.
+
+    The body is the wrong evidence for this question. Every portal's footer
+    links to other portals, forwarded digests quote each other, and an
+    advertisement can name anyone — so a body sniff answers "which portal is
+    mentioned here", not "who sent this". route() may take that guess because
+    a human is standing there having pasted the text; an unattended mailbox
+    poll may not, because the answer is stored as fact on a candidate row and
+    read back as if a portal had asserted it.
+
+    None means "no portal I know", and the caller's honest response to that is
+    to leave the message alone, not to store it under some default source.
+    """
+    hay = f"{sender} {subject}".lower()
+    for needle, key in ALERT_SENDERS:
+        if needle in hay:
+            return key
+    return None
 
 
 def parser_for(source: str | None) -> Callable[[str], dict[str, Any]] | None:

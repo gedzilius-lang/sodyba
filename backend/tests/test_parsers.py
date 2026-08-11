@@ -405,3 +405,53 @@ def test_the_free_text_scanner_does_not_guess_at_a_bare_leading_zero():
     # phone number gets dialled. PHONE_RE requires +370, 00370 or 8.
     assert parsers.phones_in("kodas 061154699 sklypui") == []
     assert parsers.phones_in("skambinti 861154699") == ["+37061154699"]
+
+
+# ------------------------------------------------------------ portal coverage
+# ALERT_ONLY in registry.py means the lawful route into this app is the
+# portal's own email alerts — which arrive through sources/mailbox.py and are
+# extracted here. A portal declared ALERT_ONLY with no parser is a
+# subscription the operator can create, and that will then be ingested as
+# nothing recognisable: kampas.lt was exactly that until this test existed.
+
+def _alert_only_keys() -> list[str]:
+    from backend.app.sources import registry
+    return sorted(s.key for s in registry.SOURCES
+                  if s.policy == registry.ALERT_ONLY)
+
+
+def test_every_alert_only_portal_has_a_parser():
+    missing = [k for k in _alert_only_keys() if parsers.parser_for(k) is None]
+    assert not missing, f"ALERT_ONLY portals with no parser: {missing}"
+
+
+def test_every_alert_only_portal_is_recognisable_from_its_own_domain():
+    """The mailbox path names the portal from the sender address, so a parser
+    that no address can reach is unreachable in practice."""
+    from backend.app.sources import registry
+    for s in registry.SOURCES:
+        if s.policy != registry.ALERT_ONLY:
+            continue
+        assert parsers.source_for_alert(f"alerts@{s.host}", "") == s.key, \
+            f"an alert from {s.host} does not route to „{s.key}“"
+
+
+def test_every_routed_sender_names_a_parser():
+    unknown = [key for _, key in parsers.ALERT_SENDERS
+               if parsers.parser_for(key) is None]
+    assert not unknown, f"routed sources with no parser: {unknown}"
+
+
+def test_a_kampas_alert_parses_as_kampas():
+    d = parsers.parse_kampas(
+        "Sodyba Ukmergės r., Deltuvos k.\n"
+        "Kaina 16 750 EUR\n"
+        "Namas 105 m2, sklypas 25 arai\n"
+        "https://www.kampas.lt/skelbimai/namai/deltuva-1234567")
+    assert d["source"] == "kampas"
+    assert d["url"] == "https://www.kampas.lt/skelbimai/namai/deltuva-1234567"
+    assert d["price_eur"] == 16750
+    assert d["house_m2"] == 105
+    assert d["plot_ares"] == 25
+    assert d["municipality"] == "Ukmergės rajono"
+    assert d["locality"] == "Deltuvos k."
