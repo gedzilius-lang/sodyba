@@ -11,7 +11,7 @@ from .advisor import advise, assess_nature
 from .config import ALL_MUNICIPALITIES, DEFAULT_MUNICIPALITIES
 from .db import connect, get_setting, set_setting
 from .scoring import CRITERIA, HARD_FLAGS, COST_LINES, DEFAULT_SETTINGS, evaluate
-from .filters import PRESETS, sanitise, match_all, matches
+from .filters import PRESETS, sanitise, match_all, matches, evaluate_all, MATCH, NEAR
 from .sources import (refresh_market_stock, poll_mailbox, mailbox_configured,
                       refresh_water, refresh_places, refresh_protected, geocode,
                       poll_all, POLLED, registry)
@@ -311,6 +311,110 @@ def update_candidate(cid: int, body: CandidateIn) -> dict[str, Any]:
 def delete_candidate(cid: int):
     with connect() as cx:
         cx.execute("DELETE FROM candidate WHERE id=?", (cid,))
+
+
+# --------------------------------------------------------------- re-evaluate
+class ReevaluateIn(BaseModel):
+    dry_run: bool = False
+
+
+def _reeval_listing(row: dict[str, Any]) -> dict[str, Any]:
+    """The same shape ingest hands to filters.evaluate(), rebuilt from a stored row.
+
+    evaluate() reads `listing.get("notes") or listing.get("raw")` for the keyword
+    haystack (see filters.py's hay_full comment); ingest passes the pre-storage
+    `raw` chunk because at that point nothing has been written yet, but a stored
+    row has no `raw` — its description lives in the `notes` column, which is
+    exactly the field evaluate() falls back to. So handing it `notes` here gives
+    re-evaluation the same view of the text a fresh ingest would have had.
+    """
+    return {
+        "title": row["title"], "locality": row["locality"],
+        "municipality": row["municipality"], "price_eur": row["price_eur"],
+        "house_m2": row["house_m2"], "plot_ares": row["plot_ares"],
+        "source": row["source"], "easting": row["easting"],
+        "northing": row["northing"],
+        "nature": json.loads(row["nature_json"] or "{}"),
+        "notes": row["notes"],
+    }
+
+
+@router.post("/candidates/reevaluate")
+def reevaluate_candidates(body: ReevaluateIn = ReevaluateIn()) -> dict[str, Any]:
+    """Re-run the current filter profiles over every stored, non-archived row.
+
+    Profiles are otherwise evaluated exactly once, at ingest (mailbox._insert,
+    poller.poll_source write match_state/profiles_json/misses_json and nothing
+    ever recomputes them). Widen a municipality list or add a keyword and every
+    row already in the table keeps the verdict it got under the old rules —
+    re-polling does not help either, since _insert short-circuits on
+    `fingerprint` before evaluation even runs for a listing already stored.
+    This endpoint is the only path that goes back and re-scores what is
+    already there against the profiles as they stand today.
+
+    Only match_state, profiles_json, misses_json (and updated_at) ever move.
+    scores_json, flags_json, costs_json, checks_json, notes, archived,
+    nature_json, easting/northing, ref, url, price_eur and everything else are
+    left byte-for-byte as stored — this function does not even read
+    scores_json or checks_json. A score set after visiting a place is never
+    overwritten by a machine; see api.locate's same rule for derived scores.
+
+    Deliberately does NOT call notify.push. The mailbox and poller paths push
+    because they surface something the user has never seen; this path only
+    changes the verdict on rows already sitting in the table. Re-evaluating
+    fifty candidates after a profile edit must not fire fifty Telegram
+    messages — that would turn a filter tweak into a spam event.
+
+    Archived rows are skipped entirely (excluded at the SQL level, not merely
+    filtered from the report): archiving is a decision the user already made
+    about that listing, and a profile edit resurrecting it into the match tier
+    would silently overturn that decision. There is no opt-in to include them
+    here — if that turns out to be the wrong call for some workflow, it should
+    be a deliberate, visible choice (e.g. an `include_archived` flag), not a
+    silent default.
+    """
+    profs = [p for p in profiles() if p.get("enabled", True)]
+
+    with connect() as cx:
+        rows = [dict(r) for r in
+                cx.execute("SELECT * FROM candidate WHERE archived=0").fetchall()]
+
+    transitions: list[dict[str, Any]] = []
+    to_write: list[tuple[str, str, str, int]] = []
+
+    for row in rows:
+        results = evaluate_all(_reeval_listing(row), profs)
+        hits = [r.key for r in results if r.state == MATCH]
+        nears = [r.key for r in results if r.state == NEAR]
+        new_state = "match" if hits else ("near" if nears else "reject")
+        new_profiles = hits or nears
+        new_misses = {r.key: [vars(m) for m in r.misses]
+                      for r in results if r.state in (MATCH, NEAR)}
+
+        old_state = row["match_state"]
+        old_profiles = json.loads(row["profiles_json"] or "[]")
+        old_misses = json.loads(row["misses_json"] or "{}")
+        if (new_state, new_profiles, new_misses) == (old_state, old_profiles, old_misses):
+            continue
+
+        transitions.append({"ref": row["ref"], "from": old_state, "to": new_state})
+        to_write.append((new_state, json.dumps(new_profiles, ensure_ascii=False),
+                         json.dumps(new_misses, ensure_ascii=False), row["id"]))
+
+    if not body.dry_run and to_write:
+        with connect() as cx:
+            for state, profiles_json, misses_json, cid in to_write:
+                cx.execute(
+                    "UPDATE candidate SET match_state=?, profiles_json=?, "
+                    "misses_json=?, updated_at=datetime('now') WHERE id=?",
+                    (state, profiles_json, misses_json, cid))
+
+    return {
+        "dry_run": body.dry_run,
+        "examined": len(rows),
+        "changed": len(transitions),
+        "transitions": transitions,
+    }
 
 
 # ------------------------------------------------- paste ingestion (auctions)
