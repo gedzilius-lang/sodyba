@@ -8,3 +8,9 @@ __pycache__/
 *.db-shm
 *.db-wal
 .DS_Store
+
+# Browser-driving tooling for the AI coder: puppeteer-core, its node_modules
+# and the screenshots it takes. It is how the frontend gets checked against a
+# real Chrome, since the pytest suite has no JS runtime by design (AGENT.md
+# section 3) — but it is not part of the app and must never ship with it.
+.uicheck/
