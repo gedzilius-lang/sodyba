@@ -117,6 +117,102 @@ function scoreCell(c) {
   return `${c.weighted_score.toFixed(2)}${per}`;
 }
 
+/* ------------------------------------------------ price, its age, its peers
+   Three facts about one number, in one cell, because the table is full: nine
+   columns, and clipping VERDIKTAS off the right edge was the last bug fixed
+   here. How long a price has been asked and how it compares with the other
+   adverts are both statements *about the price*, so they belong with it.
+   Hierarchy carries the reading order — the asked figure at full size, the two
+   context lines at 10.5px and dimmed — so the column still scans as a column
+   of prices and the context is there when a row is worth a second look. */
+
+/* Days on the market, in the largest unit that stays honest. "1 863 d." is a
+   number the reader has to divide before it means anything; "5,1 m." is the
+   fact itself. Days are kept for the short end, where they are the fact.
+   Years are floored, not rounded, and divided by DAYS_PER_YEAR — the same
+   divisor STALE_DAYS is expressed in. That coupling is the point: rounding to
+   nearest printed "5,0 m." on 1 816 days and on 1 837 days, one of them
+   accented and one not, and a colour that contradicts the number printed
+   beside it is worse than no colour. Flooring on a shared divisor makes
+   "reads 5,0 m. or more" and "is accented" the same statement. */
+const DAYS_PER_YEAR = 365;
+
+function ageText(days) {
+  if (days < 90) return `${days} d.`;
+  if (days < 730) return `${Math.round(days / 30.44)} mėn.`;
+  const years = Math.floor((days / DAYS_PER_YEAR) * 10) / 10;
+  return `${years.toFixed(1).replace('.', ',')} m.`;
+}
+
+/* Five years. An advert nobody has bought in five years is the strongest
+   evidence this app can get that the asking price is wrong — and unlike a
+   valuation it costs one subtraction.
+   The threshold is set high on purpose. The median advert in the collected set
+   has been running about 3.6 years, so a two- or three-year rule would put the
+   accent on three rows in four and the accent would stop meaning anything.
+   The age is printed on every row either way; only the colour is rationed.
+   Five DAYS_PER_YEAR years exactly, so that the accent switches on at the same
+   instant the printed figure reaches 5,0 m. — see ageText. */
+const STALE_DAYS = 5 * DAYS_PER_YEAR;
+
+/* Which unit each ratio compares, spelled out on screen: a ratio against the
+   price per are of land and one against the price per m² of house are
+   different claims, and a column that silently switched between them could not
+   be read down. EUR/a is preferred because 18 of the 28 real listings carry no
+   floor area at all; EUR/m² is the fallback, never the silent substitute. */
+const PEER_UNIT = { eur_per_are: 'EUR/a', eur_per_m2: 'EUR/m²' };
+const PEER_BASIS = { municipality: 'sav.', all: 'visi' };
+
+function peerFigure(c) {
+  const p = c.asking_vs_peers || {};
+  for (const metric of ['eur_per_are', 'eur_per_m2']) {
+    const f = p[metric];
+    if (f && f.ratio !== null && f.ratio !== undefined) return [f, metric];
+  }
+  return [null, null];                 // absence is the normal case, not an error
+}
+
+// 0,12× · 5,86× · 623×. Two decimals stop being informative once a ratio is in
+// the double digits, and at that point the interesting fact is the order of
+// magnitude — usually a plot size the portal mistyped.
+const ratioText = (r) =>
+  (Math.abs(r) >= 10 ? `${Math.round(r)}×` : `${Number(r).toFixed(2).replace('.', ',')}×`);
+
+/* The long form, for the cell's title. Says asked-price, says median, says how
+   many and on what basis, and denies being a valuation in as many words. */
+function peerTitle(f, metric) {
+  const unit = PEER_UNIT[metric];
+  const where = f.basis === 'municipality'
+    ? 'tos pačios savivaldybės skelbimų' : 'visų surinktų skelbimų';
+  return `Prašoma ${fmt(f.value, 2)} ${unit} · ${where} prašomų kainų mediana ` +
+    `${fmt(f.median, 2)} ${unit} (n=${fmt(f.n)}). Lyginamos PRAŠOMOS kainos — ` +
+    `tai nėra turto vertinimas ir ne rinkos vertė.`;
+}
+
+function priceCell(c) {
+  const bits = [`<b class="ask">${fmt(c.price_eur)}</b>`];
+
+  if (typeof c.days_listed === 'number') {
+    const stale = c.days_listed >= STALE_DAYS;
+    const title = `Paskelbta ${c.listed_at || '?'} · ${fmt(c.days_listed)} d.` +
+      (stale ? ' · skelbiama ilgiau nei penkerius metus' : '');
+    bits.push(`<small class="ctx age${stale ? ' is-stale' : ''}" title="${esc(title)}">` +
+      `skelbiama ${ageText(c.days_listed)}</small>`);
+  }
+
+  // Never bare: a ratio without its sample size and basis is a number wearing
+  // more authority than it has. n=12 and n=29 are different claims and the
+  // cell says which one this is.
+  const [f, metric] = peerFigure(c);
+  if (f) {
+    bits.push(`<small class="ctx peer" title="${esc(peerTitle(f, metric))}">` +
+      `${ratioText(f.ratio)} prašomų med.` +
+      `<span class="basis">${PEER_UNIT[metric]} · n=${fmt(f.n)} · ` +
+      `${esc(PEER_BASIS[f.basis] || f.basis)}</span></small>`);
+  }
+  return `<div class="pricecell">${bits.join('')}</div>`;
+}
+
 /* A merged-duplicate line looks like:
    "[dublikatas rinka] · 17300 EUR · 81 m2 · 41 a · <title> · <url>"
    appended to notes when dedupe folds a second-source listing into this row.
@@ -183,6 +279,10 @@ async function loadCandidates() {
   $('candCount').textContent = `${data.count} objekt${data.count === 1 ? 'as' : 'ai'}`;
   $('candEmpty').hidden = data.count > 0;
 
+  // The server's own words for what the ×med. figure is and is not. textContent,
+  // not innerHTML, and never a second wording maintained here.
+  $('peersNote').textContent = data.asking_vs_peers_note || '';
+
   updateFilterCount();
 
   data.items.forEach((c) => {
@@ -211,7 +311,7 @@ async function loadCandidates() {
       `<span class="place">${esc(c.locality || c.title || '—')}` +
       `<small>${esc(c.municipality || '')} · ${esc(c.source)}</small>${chips}</span>`,
       null, 'Vietovė'));
-    tr.appendChild(td(fmt(c.price_eur), 'num', 'Kaina'));
+    tr.appendChild(td(priceCell(c), 'num', 'Kaina'));
     tr.appendChild(td(coreBar(c), null, 'Vertinimo pjūvis'));
     tr.appendChild(td(scoreCell(c), 'num', 'Balas'));
     tr.appendChild(td(fmt(c.total_cost), 'num', 'Visi kaštai'));
@@ -584,6 +684,52 @@ async function loadIngestStatus() {
 }
 
 /* ----------------------------------------------------------------- drawer */
+
+/* Seller contacts. Read-only — they arrive with the advert and api.py erases
+   them on archive — and rendered as links because on a phone that is the whole
+   point: one tap dials, one tap writes.
+   A row is rendered only for a contact that exists. None of the 28 real
+   rinka.lt listings carries an email, so a fixed "El. paštas —" row would
+   print an empty label on every candidate in the table; the email row appears
+   the day a source supplies one and not before. */
+function renderContacts(c) {
+  const box = $('dContacts');
+  const rows = [];
+  if (c.contact_phone) {
+    // The href gets digits and a leading + only; the row shows whatever the
+    // portal wrote. A tel: URI carrying a stray character is a dead link, and
+    // the value is third-party text either way.
+    const dial = String(c.contact_phone).replace(/[^\d+]/g, '');
+    rows.push(['Telefonas',
+      `<a href="tel:${esc(dial)}">${esc(c.contact_phone)}</a>`]);
+  }
+  if (c.contact_email) {
+    rows.push(['El. paštas',
+      `<a href="mailto:${esc(c.contact_email)}">${esc(c.contact_email)}</a>`]);
+  }
+  // Nothing at all on an unsaved form is not a finding — there is no advert
+  // yet. On a stored candidate it is one, so it is stated.
+  if (!rows.length && !c.id) { box.textContent = ''; return; }
+  box.innerHTML = '<div class="natcard"><h4>Kontaktai</h4>' +
+    (rows.length
+      ? rows.map(([k, v]) => `<div class="natrow"><span>${k}</span><span>${v}</span></div>`).join('')
+      : '<div class="natrow"><span class="muted">Kontaktų nėra</span></div>') +
+    '</div>';
+}
+
+/* The advert itself, one tap away, beside the URL it opens.
+   Only http(s) reaches the href — a pasted `javascript:` URL would otherwise
+   turn this button into a one-click script injection into the console, and the
+   URL is third-party text. Anything else, including no URL at all (pasted
+   candidates often have none), hides the button rather than leaving a dead
+   one: an <a> without href is not a link, but it still looks like a button. */
+function syncOpenAd(url) {
+  const a = $('btnOpenAd');
+  const ok = /^https?:\/\//i.test(String(url || ''));
+  if (ok) a.href = url; else a.removeAttribute('href');
+  a.hidden = !ok;
+}
+
 function openDrawer(c) {
   CURRENT = c ? structuredClone(c) : {
     ref: null, source: 'evarzytynes', flags: {}, scores: {}, costs: {}, checks: {},
@@ -606,6 +752,8 @@ function openDrawer(c) {
   $('btnArchive').textContent = CURRENT.archived ? 'Grąžinti iš archyvo' : 'Archyvuoti';
 
   renderFlags(); renderScores(); renderCosts(); renderChecks();
+  renderContacts(CURRENT);
+  syncOpenAd(CURRENT.url);
   renderNature(CURRENT.nature);
   $('adviceBox').textContent = '';
   $('scrim').hidden = false; $('drawer').hidden = false;
@@ -727,6 +875,11 @@ function wire() {
     $('fSort').value = 'eur_per_point'; $('fArchived').checked = false;
     loadCandidates();
   };
+
+  // Typing or pasting a URL arms the button immediately; clearing it hides the
+  // button again. Without this the control would only agree with the field
+  // after the drawer was closed and reopened.
+  $('dUrl').addEventListener('input', () => syncOpenAd($('dUrl').value));
 
   $('btnAdd').onclick = () => openDrawer(null);
   $('btnClose').onclick = closeDrawer;

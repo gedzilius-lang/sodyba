@@ -188,6 +188,9 @@
           <!-- Nine columns, not ten. "Balas" carries the EUR-per-score-point
                figure beneath the score: they are the same judgement and, on an
                unscored candidate, two columns printed the same dash twice.
+               "Kaina" carries the listing age and the peer ratio for the same
+               reason — both are statements about this price, and a tenth column
+               is what clipped the verdict off the right edge before.
                Column widths are set by nth-child in styles.css — adding or
                reordering a column means revisiting that block. -->
           <thead>
@@ -201,6 +204,13 @@
           <tbody id="candBody"></tbody>
         </table>
       </div>
+      <!-- What the "×med." figure in the KAINA cell is, stated once under the
+           table it qualifies. The text is the server's own words (GET
+           /api/candidates → asking_vs_peers_note), written into this element by
+           app.js rather than restated here, so the screen cannot drift from the
+           thing that computed the number. A ratio between asking prices is not
+           a valuation, and this line is what stops it reading as one. -->
+      <p class="note" id="peersNote"></p>
       <p class="empty" id="candEmpty" hidden>Nėra objektų pagal šiuos filtrus. Pridėk objektą arba atlaisvink filtrus.</p>
     </section>
 
@@ -262,7 +272,23 @@
             <option value="facebook">Facebook grupė</option>
             <option value="manual">Kita</option>
           </select></label>
-        <label class="field"><span>Nuoroda</span><input id="dUrl" type="url" placeholder="https://"></label>
+        <!-- A <div>, not a <label>: a label may not contain interactive content
+             other than the control it names, and the operator asked for a
+             button that opens the advert beside its URL. The input carries an
+             aria-label of its own instead.
+             The anchor is a real link — target=_blank so the console keeps its
+             state, rel="noopener noreferrer" because rinka.lt is a third-party
+             page we do not control and window.opener would let it navigate this
+             tab. app.js sets href only for an http(s) URL and hides the button
+             entirely when there is none, so there is never a dead control. -->
+        <div class="field">
+          <span>Nuoroda</span>
+          <div class="url-row">
+            <input id="dUrl" type="url" placeholder="https://" aria-label="Nuoroda">
+            <a class="btn btn-ghost open-ad" id="btnOpenAd" target="_blank"
+               rel="noopener noreferrer" hidden>Atidaryti skelbimą</a>
+          </div>
+        </div>
         <label class="field"><span>Savivaldybė</span><select id="dMuni"></select></label>
         <label class="field"><span>Vietovė</span><input id="dLocality" placeholder="Kirdeikių k."></label>
         <label class="field"><span>Unikalus Nr.</span><input id="dCad" placeholder="0000/0000:0000"></label>
@@ -271,6 +297,12 @@
         <label class="field"><span>Sklypas (a)</span><input id="dPlot" type="number" min="0" step="0.1"></label>
         <label class="field"><span>Varžytynių pabaiga</span><input id="dEnds" type="date"></label>
       </div>
+      <!-- Seller contacts, rendered by app.js. Read-only on purpose: they
+           arrive with the advert and are erased when a candidate is archived
+           (see the RETENTION note in api.py), so there is nothing here to
+           edit. On a handset the tel: and mailto: links are the whole point of
+           the panel. -->
+      <div id="dContacts"></div>
       <label class="field"><span>Pastabos</span><textarea id="dNotes" rows="5"></textarea></label>
     </div>
 

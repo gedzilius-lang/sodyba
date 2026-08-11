@@ -94,6 +94,18 @@ def test_candidate_card_labels_match_the_table_headers():
         )
 
 
+def test_the_price_context_rides_inside_the_labelled_price_cell():
+    """Listing age and the peer ratio went into KAINA rather than into columns
+    of their own, so there is no new cell to drift out of sync with a <th> —
+    but the two context lines still have to survive the card layout, where the
+    cell becomes a flex row with its label printed on the left. They collapse
+    onto one line beside the price there, the way EUR/tšk. already does."""
+    assert "td(priceCell(c), 'num', 'Kaina')" in APP_JS
+    assert "Kaina" in _headers("candTable")
+    block = _media(f"@media (max-width:{CARDS_BELOW}px)")
+    assert ".ctx{display:inline;margin-left:8px}" in block
+
+
 def test_market_card_labels_match_the_table_headers():
     for h in _headers("mktTable"):
         assert f'data-label="{h}"' in APP_JS, (

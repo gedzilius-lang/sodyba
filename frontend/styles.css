@@ -186,16 +186,20 @@ h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
    valuable, and the three judgement columns on the right are the answer — so
    VERDIKTAS is given room to hold its longest label, "Trumpasis sąrašas",
    rather than being the column that pays for everyone else.
+   KAINA is the widest of the identity columns now: it holds the asked figure,
+   how long it has been asked and how it compares with the other adverts. The
+   six points it gained came a point or two at a time from the columns that had
+   slack, not from VERDIKTAS.
    Adding a column here means re-splitting all nine; the count is pinned by
    test_frontend_responsive.py. */
-#candTable th:nth-child(1){width:7%}    /* Nr. */
-#candTable th:nth-child(2){width:13%}   /* Vietovė */
-#candTable th:nth-child(3){width:8%}    /* Kaina */
-#candTable th:nth-child(4){width:13%}   /* Vertinimo pjūvis */
+#candTable th:nth-child(1){width:6%}    /* Nr. */
+#candTable th:nth-child(2){width:12%}   /* Vietovė */
+#candTable th:nth-child(3){width:14%}   /* Kaina */
+#candTable th:nth-child(4){width:12%}   /* Vertinimo pjūvis */
 #candTable th:nth-child(5){width:11%}   /* Balas */
 #candTable th:nth-child(6){width:9%}    /* Visi kaštai */
-#candTable th:nth-child(7){width:14%}   /* Gamta */
-#candTable th:nth-child(8){width:11%}   /* Atitikimas */
+#candTable th:nth-child(7){width:12%}   /* Gamta */
+#candTable th:nth-child(8){width:10%}   /* Atitikimas */
 #candTable th:nth-child(9){width:14%}   /* Verdiktas */
 .grid tbody tr{cursor:pointer;transition:background .1s ease}
 .grid tbody tr:hover{background:var(--panel-2)}
@@ -208,6 +212,31 @@ h1,h2{margin:0;font-weight:600;letter-spacing:-.01em}
    on an unscored candidate they were two columns of the same em dash. */
 .per{display:block;color:var(--paper-dim);font-size:10.5px;font-weight:400}
 .muted{color:var(--paper-dim)}
+
+/* ------------------------------------------------------------- price column
+   The asked figure, how long it has been asked, and how it compares with the
+   other adverts collected — one cell, because they are one judgement and
+   because a tenth column is what pushed VERDIKTAS off the right edge before.
+   The hierarchy is the whole design: the price keeps the cell's own size and
+   weight, the two context lines drop to 10.5px and to --paper-dim, so a
+   scanning eye reads a column of prices and a considering eye reads the rest.
+   overflow-wrap is reset from the .grid td safety net — between words, never
+   inside one; "prašomų" split across two lines is not a smaller problem than a
+   column overflowing. */
+.pricecell{display:block}
+.pricecell .ask{font-weight:600}
+.ctx{display:block;font-size:10.5px;font-weight:400;line-height:1.35;
+  color:var(--paper-dim);overflow-wrap:normal}
+.ctx .basis{display:block}
+/* Staleness: ochre, the palette's "look at this" — never oxide, which in this
+   console means rejected, and a long-running advert is not a rejected one. The
+   threshold lives in app.js (STALE_DAYS = 1825, five years) because it is a
+   judgement about the data, not about the layout. */
+.ctx.is-stale{color:var(--ochre)}
+/* One line under the table saying what the ×med. figure is. It qualifies every
+   ratio above it, so it sits with the table rather than in a tooltip. */
+.note{margin:0;padding:10px 16px;border-top:1px solid var(--rule);
+  font-size:11px;line-height:1.45;color:var(--paper-dim)}
 tr.is-archived{opacity:.42}
 
 /* ------------------------------------------------------- signature: core bar
@@ -285,6 +314,20 @@ tr.is-archived{opacity:.42}
 .krow a{color:var(--slate);margin-left:auto;font-family:var(--mono);font-size:11px}
 .krow .price{font-family:var(--mono);font-size:11px;color:var(--paper-dim);
   min-width:64px;text-align:right}
+/* The URL field and the button that opens it, side by side. It wraps rather
+   than squeezing the input: in the drawer's two-column grid the field is about
+   300px, and below 620px it is the full width of a phone.
+   display:inline-flex on the anchor is load-bearing — .btn sets min-height
+   under pointer:coarse and min-height does nothing to an inline box, so an
+   <a class="btn"> left inline would be the one control on the screen under
+   44px. */
+.url-row{display:flex;flex-wrap:wrap;gap:7px;align-items:stretch}
+.url-row input{flex:1 1 130px;min-width:0}
+.open-ad{display:inline-flex;align-items:center;justify-content:center;flex:none;
+  text-decoration:none;white-space:nowrap}
+/* Contacts reuse the .natcard/.natrow pair; only the links are new. */
+.natcard a{color:var(--lichen);text-decoration:none;overflow-wrap:anywhere}
+.natcard a:hover{text-decoration:underline}
 .cost-total{display:flex;justify-content:space-between;padding-top:12px;margin-top:8px;
   border-top:1px solid var(--rule);font-size:11px;text-transform:uppercase;
   letter-spacing:.09em;color:var(--paper-dim)}
@@ -412,6 +455,15 @@ tr.is-archived{opacity:.42}
   small.miss{flex-basis:100%;text-align:right}
   .tag{white-space:nowrap}
   .per{display:inline;margin-left:8px}
+  /* Same reason as .per: a card row is as wide as the card and has no need of
+     the stack, so the price context runs on one line beside the price and
+     wraps only when it has to. */
+  .ctx{display:inline;margin-left:8px}
+  /* nowrap only here: a card has the width for "EUR/a · n=29 · visi" in one
+     piece, and without it the line broke after n=29 and left "· visi" alone on
+     a line of its own. In the table the same string has to stay breakable —
+     the column is 104px at the narrowest width the table survives to. */
+  .ctx .basis{display:inline;margin-left:5px;white-space:nowrap}
 
   /* Two cards abreast where there is room for them — a tablet showing one
      card per row wastes half its width and doubles the scrolling. */
@@ -517,6 +569,10 @@ tr.is-archived{opacity:.42}
      wrapping them to inherit a target from — they have to carry their own. */
   .wrow input,.crow input{min-height:44px}
   .rail-block>summary{min-height:44px}
+  /* A phone number in the drawer is a tel: link, and on a handset dialling it
+     is the reason the panel is open at all — it has to be tappable, not merely
+     readable. Same for the mailto: row when a source ever supplies one. */
+  .natcard a{display:inline-flex;align-items:center;min-height:44px}
   .srow input[type=range]{height:44px}
   .grid tbody tr{cursor:default}
 }
