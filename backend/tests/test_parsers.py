@@ -260,3 +260,59 @@ def test_municipality_from_existing_forms_are_unaffected_by_the_raj_fix(text, ex
 ])
 def test_municipality_from_the_raj_abbreviation_does_not_fire_on_unrelated_words(text):
     assert parsers.municipality_from(text) is None
+
+
+# A regex match is not proof the capture names a real municipality. Live:
+# a rinka.lt listing's labelled "Mikrorajonas / Gyvenvietė:" field satisfied
+# MUNI_RE on the word "Mikrorajonas" itself and was formatted into "Mikro
+# rajono", which does not exist -- and municipality is a strict identity
+# gate in dedupe.is_duplicate and a filter criterion, so an invented value
+# is worse than None: None is honestly unknown and skips the check, while a
+# fabricated name silently fails every municipality-gated profile.
+
+@pytest.mark.parametrize("text", [
+    "Mikrorajonas / Gyvenvietė",
+    "Naujas rajonas",
+])
+def test_municipality_from_rejects_a_match_that_is_not_a_real_municipality(text):
+    assert parsers.municipality_from(text) is None
+
+
+@pytest.mark.parametrize("text,expected", [
+    # Every form that worked before validation was added must still work --
+    # this is a whitelist check layered on top of the existing regexes, not
+    # a replacement for them.
+    ("Lazdijų r.", "Lazdijų rajono"),
+    ("Lazdijų raj.", "Lazdijų rajono"),
+    ("Lazdijų raj", "Lazdijų rajono"),
+    ("Lazdijų rajone", "Lazdijų rajono"),
+    ("Lazdijų rajono", "Lazdijų rajono"),
+    ("Lazdijų r. sav.", "Lazdijų rajono"),
+    ("Vilniaus m. sav.", "Vilniaus miesto"),
+    ("Alytaus r. sav.", "Alytaus rajono"),
+])
+def test_municipality_from_still_accepts_every_real_form_after_validation(text, expected):
+    assert parsers.municipality_from(text) == expected
+
+
+# municipality_from_label maps a portal's structured address field (not free
+# prose) to the ALL_MUNICIPALITIES form -- see rinka.py, which reads
+# rinka.lt's "Miestas / Rajonas:" field this way.
+
+@pytest.mark.parametrize("value,expected", [
+    ("Rietavo sav.", "Rietavo"),
+    ("Plungės r. sav.", "Plungės rajono"),
+    ("Vilniaus m. sav.", "Vilniaus miesto"),
+    ("Kazlų Rūdos sav.", "Kazlų Rūdos"),
+])
+def test_municipality_from_label_maps_the_registers_suffixes(value, expected):
+    assert parsers.municipality_from_label(value) == expected
+
+
+def test_municipality_from_label_rejects_an_unrecognised_value():
+    assert parsers.municipality_from_label("Nežinomas r. sav.") is None
+
+
+@pytest.mark.parametrize("value", ["-", "", None])
+def test_municipality_from_label_treats_dash_and_empty_as_absent(value):
+    assert parsers.municipality_from_label(value) is None

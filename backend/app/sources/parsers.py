@@ -15,6 +15,8 @@ import re
 from html import unescape
 from typing import Any, Callable
 
+from ..config import ALL_MUNICIPALITIES
+
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"[ \t\xa0]+")
 
@@ -137,14 +139,57 @@ def municipality_from(text: str) -> str | None:
 
     District first, matching the original precedence: a text carrying both
     forms is far likelier to be a district listing that mentions a city.
+
+    Fix round 2: a regex match is not proof the capture names a real place.
+    "Mikrorajonas" (a field label, not a village) satisfies MUNI_RE just
+    like a genuine district name would, and gets formatted into "Mikro
+    rajono" -- confident, and wrong, because that municipality does not
+    exist. The result is validated against ALL_MUNICIPALITIES before it is
+    returned; an unrecognised capture comes back None, the same honest
+    answer as finding nothing at all, rather than an invented value that
+    would silently fail every municipality-gated filter and defeat
+    dedupe.is_duplicate's exact-match identity gate against its own twin.
     """
     m = MUNI_RE.search(text or "")
     if m:
-        return f"{m.group(1)} rajono"
+        candidate = f"{m.group(1)} rajono"
+        return candidate if candidate in ALL_MUNICIPALITIES else None
     m = CITY_RE.search(text or "")
     if m:
-        return f"{m.group(1)} miesto"
+        candidate = f"{m.group(1)} miesto"
+        return candidate if candidate in ALL_MUNICIPALITIES else None
     return None
+
+
+def municipality_from_label(value: str | None) -> str | None:
+    """A portal's labelled address field mapped to the ALL_MUNICIPALITIES form.
+
+    Some portals expose the municipality as a structured field rather than
+    free prose -- rinka.lt renders "Plungės r. sav.", "Vilniaus m. sav.",
+    "Rietavo sav.": the address register's own wording, already isolated
+    from surrounding text. MUNI_RE/CITY_RE exist to find a place name
+    inside a sentence, which is not this job -- the whole value already IS
+    the place name plus a fixed suffix, so this maps the suffix directly:
+    strip a trailing " sav.", then translate a remaining " r."/" m." to
+    " rajono"/" miesto". Multi-word and suffixless municipalities (Kazlų
+    Rūdos, Rietavo, Marijampolės, Kalvarijos, Birštono, Neringos, Pagėgių,
+    Visagino, Elektrėnų, Druskininkų...) have no " r."/" m." to translate
+    and pass through unchanged once " sav." is stripped.
+
+    Validated against ALL_MUNICIPALITIES for the same reason as
+    municipality_from: a value the register itself doesn't recognise must
+    come back None, not a guess.
+    """
+    v = (value or "").strip()
+    if not v:
+        return None
+    if v.endswith(" sav."):
+        v = v[: -len(" sav.")]
+    if v.endswith(" r."):
+        v = v[: -len(" r.")] + " rajono"
+    elif v.endswith(" m."):
+        v = v[: -len(" m.")] + " miesto"
+    return v if v in ALL_MUNICIPALITIES else None
 
 
 def _common(text: str) -> dict[str, Any]:
