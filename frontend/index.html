@@ -262,12 +262,30 @@
     <div class="tabpane is-on" data-pane="facts">
       <div class="grid2">
         <label class="field"><span>Pavadinimas</span><input id="dName"></label>
+        <!-- Every key in backend/app/sources/registry.py that can put a row in
+             the candidate table needs an <option> here. A <select> handed a
+             value it has no option for shows nothing at all, so a missing key
+             is a blank field, not an error: "rinka" was absent and the source
+             therefore read empty on all 35 real rows, which are all from
+             rinka.lt. test_frontend_source_select.py pins the list to the
+             registry so the next source added there cannot go missing here.
+             `data_gov` is deliberately not offered: it is the open-data API
+             behind the nature layers, never a listing's origin. Two keys,
+             two hosts, two policies: turtas.lt (Turto bankas) is polled,
+             aukcionai.turtas.lt is link-only. -->
         <label class="field"><span>Šaltinis</span>
           <select id="dSource">
+            <option value="rinka">rinka.lt</option>
             <option value="evarzytynes">evarzytynes.lt</option>
-            <option value="turtas">aukcionai.turtas.lt</option>
+            <option value="turtas">turtas.lt</option>
+            <option value="aukcionai_turtas">aukcionai.turtas.lt</option>
+            <option value="zudc">zudc.lt</option>
+            <option value="ntaukcionai">ntaukcionai.lt</option>
+            <option value="adminbiuras">adminbiuras.lt</option>
             <option value="aruodas">aruodas.lt</option>
             <option value="domoplius">domoplius.lt</option>
+            <option value="kampas">kampas.lt</option>
+            <option value="skelbiu">skelbiu.lt</option>
             <option value="alio">alio.lt</option>
             <option value="facebook">Facebook grupė</option>
             <option value="manual">Kita</option>
