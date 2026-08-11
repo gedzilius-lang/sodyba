@@ -1,5 +1,7 @@
 import pathlib
 
+import pytest
+
 from backend.app.sources.adapters import rinka
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
@@ -7,8 +9,29 @@ CATEGORY = (FIX / "rinka_category.html").read_text(encoding="utf-8")
 DETAIL = (FIX / "rinka_detail.html").read_text(encoding="utf-8")
 DETAIL_DESC_FIRST = (FIX / "rinka_detail_desc_first.html").read_text(encoding="utf-8")
 DETAIL_WITH_SELLER_ADS = (FIX / "rinka_detail_with_seller_ads.html").read_text(encoding="utf-8")
+DETAIL_LABELLED = (FIX / "rinka_detail_labelled_fields.html").read_text(encoding="utf-8")
 URL = "https://www.rinka.lt/skelbimas/parduodama-sodyba-id-5076782"
 SELLER_ADS_URL = "https://www.rinka.lt/skelbimas/x-id-4941439"
+
+
+def _labelled_detail_html(muni_value: str, locality_value: str = "Plateliai") -> str:
+    """A minimal detail page in the real field order: nav, <h1>, description,
+    price, then a details table carrying the labelled location fields --
+    matching the structure verified against 20 live listings 2026-08-10."""
+    return (
+        '<html><body>'
+        '<nav><select><option>Akmenės r.</option></select></nav>'
+        '<h1>Parduodama sodyba</h1>'
+        '<div class="description">Rami sodyba kaimo pakraštyje.</div>'
+        '<span class="price">Kaina: 45000,00 &euro;</span>'
+        '<table class="details">'
+        '<tr><td>Miestas / Rajonas:</td></tr>'
+        f'<tr><td>{muni_value}</td></tr>'
+        '<tr><td>Mikrorajonas / Gyvenvietė:</td></tr>'
+        f'<tr><td>{locality_value}</td></tr>'
+        '</table>'
+        '</body></html>'
+    )
 
 
 def test_list_url_is_paginated():
@@ -174,3 +197,58 @@ def test_parse_detail_with_url_missing_an_id_does_not_raise():
     url_without_id = "https://www.rinka.lt/skelbimas/parduodama-sodyba"
     d = rinka.parse_detail(DETAIL_WITH_SELLER_ADS, url_without_id)
     assert d["price_eur"] == 17500.0
+
+
+# rinka.lt carries the location in labelled structured fields ("Miestas /
+# Rajonas:" / "Mikrorajonas / Gyvenvietė:") on every listing measured
+# (20/20), while free-text extraction over the heading and content block
+# located a village in only 4/20 -- most Lithuanian village names simply
+# don't end in the "...k." shape LOCALITY_RE looks for. Since locality
+# feeds advisor.assess_nature's water/forest_water scoring (25% of the
+# model's weight combined), reading the label is the fix.
+
+def test_parse_detail_reads_municipality_and_locality_from_labelled_fields():
+    d = rinka.parse_detail(DETAIL_LABELLED, URL)
+    assert d["municipality"] == "Plungės rajono"
+    assert d["locality"] == "Plateliai"
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Rietavo sav.", "Rietavo"),
+    ("Plungės r. sav.", "Plungės rajono"),
+    ("Vilniaus m. sav.", "Vilniaus miesto"),
+    ("Kazlų Rūdos sav.", "Kazlų Rūdos"),
+])
+def test_parse_detail_maps_every_labelled_municipality_shape(label, expected):
+    d = rinka.parse_detail(_labelled_detail_html(label), URL)
+    assert d["municipality"] == expected
+
+
+def test_parse_detail_labelled_dash_municipality_is_treated_as_absent():
+    # rinka.lt renders an empty field as a bare "-". The heading here carries
+    # no municipality either, so an absent label falls through to the
+    # existing free-text path, which also finds nothing -- not the literal
+    # dash.
+    html = _labelled_detail_html("-")
+    assert rinka.parse_detail(html, URL)["municipality"] is None
+
+
+def test_parse_detail_labelled_dash_locality_is_treated_as_absent():
+    html = _labelled_detail_html("Plungės r. sav.", locality_value="-")
+    assert rinka.parse_detail(html, URL)["locality"] is None
+
+
+def test_parse_detail_unrecognised_labelled_municipality_yields_none_not_a_guess():
+    # The label is present -- the field is not omitted or "-" -- but its
+    # value doesn't resolve to any real municipality. That must come back
+    # None outright, not fall through to a free-text guess that might
+    # coincidentally find something elsewhere on the page.
+    html = _labelled_detail_html("Nežinomas r. sav.")
+    assert rinka.parse_detail(html, URL)["municipality"] is None
+
+
+def test_parse_detail_falls_back_to_the_heading_when_labels_are_absent():
+    # No labelled table at all: the pre-fix fixtures (no details table) must
+    # keep resolving municipality from the heading, exactly as before.
+    assert rinka.parse_detail(DETAIL, URL)["municipality"] == "Alytaus rajono"
+    assert rinka.parse_detail(DETAIL_DESC_FIRST, URL)["municipality"] == "Kauno rajono"

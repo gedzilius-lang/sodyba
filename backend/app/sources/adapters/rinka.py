@@ -54,6 +54,30 @@ _URL_ID_RE = re.compile(r"-id-(\d+)(?:[/?#]|$)")
 # "sodyba. Vienkemis" rather than shipping the stray ", .".
 _PUNCT_RUN_RE = re.compile(r"[.,]\s+(?=[.,])")
 
+# Labelled structured fields, present and populated on every one of 20 live
+# listings measured 2026-08-10 -- unlike free-text extraction, which located
+# a village in only 4/20 (most Lithuanian village names simply don't end in
+# the "...k." shape LOCALITY_RE looks for). The label is the site's own
+# authoritative value, so it is tried first; the heading/content-block
+# regexes remain the fallback for the rare page missing it. The value sits
+# on the line after the label once HTML flattens ("Miestas / Rajonas:\n
+# Plungės r. sav."), so \s* (which matches the newline) bridges the two.
+_LABEL_MUNI_RE = re.compile(r"Miestas\s*/\s*Rajonas\s*:\s*(.+)")
+_LABEL_LOC_RE = re.compile(r"Mikrorajonas\s*/\s*Gyvenvietė\s*:\s*(.+)")
+
+
+def _label_value(m: re.Match | None) -> str | None:
+    """The text captured after a labelled field, or None for absent/'-'.
+
+    rinka.lt renders an empty field as a bare '-' rather than omitting the
+    label entirely -- treat that the same as no label at all, not as a
+    place literally named "-".
+    """
+    if not m:
+        return None
+    v = m.group(1).strip()
+    return v if v and v != "-" else None
+
 
 def list_url(page: int = 1, per_page: int = 200) -> str:
     return f"{BASE}{CATEGORY}?page={page}&per_page={per_page}"
@@ -115,12 +139,33 @@ def parse_detail(html: str, url: str) -> dict[str, Any]:
     title = _PUNCT_RUN_RE.sub("", title) if title else title
     d["title"] = (title or "")[:180] or None
 
-    # Municipality: heading first, content block second. Never the whole page.
-    # Formatting goes through parsers.municipality_from so a city municipality
+    # Municipality: the labelled "Miestas / Rajonas:" field first -- it is
+    # the page's own authoritative value, present on 20/20 listings measured,
+    # so a present-but-unrecognised label is trusted over a free-text guess
+    # and yields None outright rather than falling through to one. Only an
+    # ABSENT label (missing, or rendered as '-') falls back to the previous
+    # behaviour: heading first, content block second, never the whole page
+    # (the nav lists every municipality in the country). Formatting goes
+    # through parsers.municipality_from/_label so a city municipality
     # ("Kauno m. sav.") is not relabelled as the district of the same name --
     # they are separate municipalities, and dedupe compares this field exactly.
-    d["municipality"] = (parsers.municipality_from(title or "")
-                         or parsers.municipality_from(body))
+    label_muni = _label_value(_LABEL_MUNI_RE.search(body))
+    if label_muni is not None:
+        d["municipality"] = parsers.municipality_from_label(label_muni)
+    else:
+        d["municipality"] = (parsers.municipality_from(title or "")
+                             or parsers.municipality_from(body))
+
+    # Locality: the labelled "Mikrorajonas / Gyvenvietė:" field, passed
+    # through unchanged (nominative, e.g. "Plateliai") -- sources.nature.
+    # geocode already tolerates the nominative form when resolving a village
+    # to coordinates (verified 12/12 against declined gazetteer entries like
+    # "Platelių k."), so declining it here would be duplicated, riskier work.
+    # Falls back to _common's free-text LOCALITY_RE result, already in
+    # d["locality"], when the label is absent.
+    label_loc = _label_value(_LABEL_LOC_RE.search(body))
+    if label_loc is not None:
+        d["locality"] = label_loc
 
     d["source"] = KEY
     d["url"] = url
