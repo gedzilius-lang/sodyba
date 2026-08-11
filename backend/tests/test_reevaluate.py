@@ -58,9 +58,10 @@ def _isolated():
     with connect() as cx:
         cx.execute("DELETE FROM candidate WHERE ref LIKE 'REV%'")
     yield
-    # get_setting(...) or PRESETS treats "unset" and "set to PRESETS" the same
-    # way for every reader, so restoring PRESETS when nothing was stored before
-    # is behaviourally identical to leaving the key absent.
+    # filters.resolve_profiles serves a stored entry for its own key and the
+    # code preset for every key without one, so a stored list that IS the
+    # presets resolves to the presets — restoring PRESETS when nothing was
+    # stored before is behaviourally identical to leaving the key absent.
     set_setting(PROFILES_KEY, original if original is not None else PRESETS)
     with connect() as cx:
         cx.execute("DELETE FROM candidate WHERE ref LIKE 'REV%'")

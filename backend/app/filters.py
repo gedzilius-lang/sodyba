@@ -273,6 +273,65 @@ PRESETS: list[dict[str, Any]] = [
     },
 ]
 
+PRESET_KEYS = tuple(p["key"] for p in PRESETS)
+
+
+def resolve_profiles(stored: Any) -> list[dict[str, Any]]:
+    """The profiles the app actually searches with: PRESETS, overridden per key. PURE.
+
+    The rule this replaces was `stored or PRESETS` — the whole stored list, or
+    the whole code list, never a mix. That made the first save freeze the
+    preset list forever: an edit to a preset in this file never took effect
+    again, and a preset *added* to this file never appeared at all. It is not a
+    hypothetical. `09f980c` widened the preset municipality lists and the
+    operator's machine kept searching the old, narrower ones for days, silently,
+    because a stored list existed; `zemaitija_lakes` would have been invisible
+    the same way.
+
+    So the merge is per key, not per list:
+
+    * a preset key ABSENT from `stored` is served from PRESETS — that is what
+      makes a new or widened preset reach a machine that has ever saved;
+    * a preset key PRESENT in `stored` is served as stored, untouched — the
+      operator's hand-edits are the whole point of a saved list and a code
+      release must not silently overwrite them;
+    * a key in `stored` that is no preset at all is an operator-authored
+      profile (`rinka_sodybos` is a real one) and is kept.
+
+    Ordering is deliberate: preset keys first, in the order this file declares
+    them, then operator-only keys in their stored order. The order the presets
+    are written in is maintained and meaningful, so a new preset lands where it
+    was authored to land rather than after whatever the operator has saved;
+    and because the result no longer depends on the stored list's ordering at
+    all, the same stored rows always resolve to the same list. Nothing here
+    depends on order for correctness — it is display order and the order
+    `profiles_json` records hits in.
+
+    The cost of a merge, stated plainly: a preset can no longer be *removed* by
+    saving a list without it (it comes straight back). Turning one off is the
+    supported way, and it persists exactly because a stored entry wins for its
+    own key. The UI offers no delete either, so nothing regresses.
+
+    Tolerates a malformed setting rather than raising: anything that is not a
+    list of dicts with keys is ignored, because refusing to produce a profile
+    list would take ingestion down over a bad row in `settings`.
+    """
+    saved: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    if isinstance(stored, list):
+        for p in stored:
+            if not isinstance(p, dict):
+                continue
+            key = p.get("key")
+            if not key or str(key) in saved:
+                continue
+            saved[str(key)] = p
+            order.append(str(key))
+    out = [saved.get(p["key"], p) for p in PRESETS]
+    out += [saved[k] for k in order if k not in PRESET_KEYS]
+    return out
+
+
 # Geographic scope. Leave `municipalities` empty and `centres` empty to scan all
 # of Lithuania; add centres to draw radius circles around named places instead.
 # A centre may be a settlement or a lake — nature.resolve_centre tries the

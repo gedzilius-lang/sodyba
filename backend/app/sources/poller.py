@@ -57,10 +57,14 @@ def _save_cursor(source: str, last_id: int) -> None:
 
 
 def _profiles() -> list[dict[str, Any]]:
-    from ..db import get_setting
-    from ..filters import PRESETS
-    return [p for p in (get_setting("filter_profiles") or PRESETS)
-            if p.get("enabled", True)]
+    # api.profiles() is the single resolution of stored profiles against the
+    # code presets (filters.resolve_profiles). Reading the setting directly
+    # here is what let a preset added or widened in filters.py never reach the
+    # poller — the one place where it matters most, because this is what
+    # decides whether a listing is stored at all. Local import: api imports
+    # this module's package at load time.
+    from ..api import profiles
+    return [p for p in profiles() if p.get("enabled", True)]
 
 
 async def poll_source(key: str, fetch: Fetch | None = None,

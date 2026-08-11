@@ -990,7 +990,10 @@ function wire() {
   $('epPick').onchange = loadProfileEditor;
   $('epCentres').onchange = () => renderCentreResolution();
   $('btnResetProfiles').onclick = async () => {
-    if (!confirm('Grąžinti numatytuosius profilius? Tavo pakeitimai bus prarasti.')) return;
+    // Says what reset now actually does: it drops your edits to the built-in
+    // profiles and leaves profiles you created yourself alone (api.reset_profiles).
+    if (!confirm('Grąžinti numatytuosius profilius? Tavo atlikti jų pakeitimai '
+                 + 'bus prarasti; tavo paties sukurti profiliai išliks.')) return;
     PROFILES = (await api('/profiles/reset', { method: 'POST' })).profiles;
     renderProfiles(); await loadCandidates(); toast('Profiliai atkurti');
   };

@@ -64,9 +64,11 @@ def _body(msg: email.message.Message) -> str:
 
 
 def _profiles() -> list[dict[str, Any]]:
-    from ..db import get_setting
-    from ..filters import PRESETS
-    return get_setting("filter_profiles") or PRESETS
+    # One resolution for every path — see api.profiles and
+    # filters.resolve_profiles. Local import to avoid the cycle, exactly as
+    # _insert imports settings below.
+    from ..api import profiles
+    return profiles()
 
 
 def _next_ref(cx) -> str:

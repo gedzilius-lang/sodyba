@@ -12,7 +12,8 @@ from .advisor import advise, assess_nature
 from .config import ALL_MUNICIPALITIES, DEFAULT_MUNICIPALITIES
 from .db import connect, get_setting, set_setting
 from .scoring import CRITERIA, HARD_FLAGS, COST_LINES, DEFAULT_SETTINGS, evaluate
-from .filters import PRESETS, sanitise, match_all, matches, evaluate_all, MATCH, NEAR
+from .filters import (PRESETS, PRESET_KEYS, resolve_profiles, sanitise, match_all,
+                      matches, evaluate_all, MATCH, NEAR)
 from .sources import (refresh_market_stock, poll_mailbox, mailbox_configured,
                       refresh_water, refresh_places, refresh_protected, geocode,
                       resolve_centre, poll_all, POLLED, registry)
@@ -26,7 +27,14 @@ PROFILES_KEY = "filter_profiles"
 
 
 def profiles() -> list[dict[str, Any]]:
-    return get_setting(PROFILES_KEY) or PRESETS
+    """The one resolution of stored profiles against the code presets.
+
+    Every path that searches — this module, sources/poller.py and
+    sources/mailbox.py — comes through here, so the poller and the UI cannot
+    disagree about which profiles exist. See filters.resolve_profiles for the
+    merge rule and why `stored or PRESETS` was wrong.
+    """
+    return resolve_profiles(get_setting(PROFILES_KEY))
 
 
 def _layer_status() -> dict[str, int]:
@@ -680,8 +688,30 @@ def put_profiles(body: ProfilesIn) -> dict[str, Any]:
 
 @router.post("/profiles/reset")
 def reset_profiles() -> dict[str, Any]:
-    set_setting(PROFILES_KEY, PRESETS)
-    return {"profiles": PRESETS}
+    """Drop the operator's overrides of the presets, keep everything else.
+
+    This used to write a snapshot of PRESETS into the setting. That is the
+    exact move that froze the list in the first place — after a reset, every
+    preset key had a stored copy, so the next release's edits to those presets
+    could never reach this machine again, and the operator would have had to
+    press reset a second time to pick up a fix they never knew they were
+    missing.
+
+    Deleting the setting outright would be the other tidy answer, and it is
+    wrong for a different reason: it would take `rinka_sodybos` — an operator
+    written profile that exists nowhere in the code — with it. A reset button
+    must not delete something it cannot restore.
+
+    So reset removes the stored entries for PRESET keys only. The presets then
+    resolve from the code, which is what "restore defaults" means now that a
+    merge exists, and profiles the operator authored themselves survive.
+    """
+    stored = get_setting(PROFILES_KEY)
+    kept = [p for p in stored
+            if isinstance(p, dict) and p.get("key") not in PRESET_KEYS] \
+        if isinstance(stored, list) else []
+    set_setting(PROFILES_KEY, kept)
+    return {"profiles": profiles()}
 
 
 class TestIn(BaseModel):
