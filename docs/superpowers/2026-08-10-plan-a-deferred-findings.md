@@ -182,3 +182,23 @@ confident wrong value rather than an honest `None`?**
   manually (three sleeps, each exactly rinka's declared 2.0s). This is a
   lawfulness property toward sites that permit crawling and deserves an
   assertion rather than a controller's word.
+
+## Added after the intake-widening branch
+
+- **A9** — **existing candidate rows may record a category they did not come
+  from.** Every rinka list page renders a second block of the site's ~10
+  newest adverts alongside the category's own results, and `list_ids` read
+  both until 2026-08-13. Two consequences, both pre-dating this branch
+  because the block was always on page 1 of `parduodamos-sodybos`:
+  - `candidate.source_category`, added by this branch, is wrong for any row
+    ingested from that block. It is now correct going forward.
+  - Those adverts can be **any** property type — the first entry on the
+    sodybos page saved 2026-08-12 was a 215,000 EUR butas. `JUNK_WORDS` and
+    the price ceiling reject most of them, but that is a filter compensating
+    for an ingestion bug, not the reason the filter exists.
+
+  Not rewritten. Back-labelling would mean re-deriving each stored row's
+  category from a page that no longer exists, and guessing is the confident
+  wrong value this project ranks first. The rows are few and visible: any
+  candidate whose asking price or type looks unlike a homestead is a
+  candidate for this. Delete or archive them by hand if they turn up.

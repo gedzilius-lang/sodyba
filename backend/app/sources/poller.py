@@ -58,6 +58,27 @@ def _save_cursor(source: str, category: str, last_id: int) -> None:
             (source, category, str(last_id)))
 
 
+def _is_list_page(adapter: Any, html: str) -> bool:
+    """Whether a 200 was a list page at all, per the adapter that knows.
+
+    Adapters that do not answer keep the old proxy — any listing link means
+    it was a page — so adding this cannot change their behaviour.
+    """
+    fn = getattr(adapter, "is_list_page", None)
+    return bool(fn(html)) if fn else bool(adapter.list_ids(html))
+
+
+def _results_bounded(adapter: Any, html: str) -> bool:
+    """Whether the adapter could isolate this category's own results.
+
+    Adapters that do not answer are assumed to have done so: they are not
+    known to carry a foreign block, and warning about every page of every
+    other source would be noise, not signal.
+    """
+    fn = getattr(adapter, "results_bounded", None)
+    return bool(fn(html)) if fn else True
+
+
 def _profiles() -> list[dict[str, Any]]:
     # api.profiles() is the single resolution of stored profiles against the
     # code presets (filters.resolve_profiles). Reading the setting directly
@@ -132,14 +153,25 @@ async def _poll_category(source, adapter, key: str, category: str,
                     "scanned": 0, "rejected": 0, "created": [],
                     "pages_capped": False, "stalled_at": None,
                     "listing_free_page": None}
+        if not _results_bounded(adapter, html):
+            # The adapter could not tell this category's own results from the
+            # site-wide newest-adverts block, so it read the whole page. Every
+            # id still reaches us — nothing is lost — but some may carry a
+            # category they did not come from. PURE adapters report; callers
+            # log, as main.py does for registry.stale().
+            log.warning("%s/%s page %s: could not bound the results block, "
+                        "reading every id on the page", key, category, page)
         all_ids = adapter.list_ids(html)
-        if not all_ids:
-            # No listing links whatsoever. Per fact 2 above a real page
-            # always carries some, even past the end of the category, so
-            # this is a rate limiter, a maintenance notice, or a render this
-            # parser does not understand — wearing a 200. Reading it as the
-            # end of the category would advance the watermark over every
+        if not all_ids and not _is_list_page(adapter, html):
+            # No listing markup whatsoever. A real page always carries some,
+            # so this is a rate limiter, a maintenance notice, or a render
+            # this parser does not understand — wearing a 200. Reading it as
+            # the end of the category would advance the watermark over every
             # lower id on the pages behind it, so it is a stall instead.
+            #
+            # `not all_ids` alone will not do: once the newest-adverts block
+            # is excluded, a page past the end of a category yields zero ids
+            # legitimately, and that is the ordinary end of the walk.
             listing_free_page = page
             break
         before = len(fresh)

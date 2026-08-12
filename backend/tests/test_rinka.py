@@ -72,6 +72,102 @@ def test_list_ids_returns_absolute_urls():
                for _, u in rinka.list_ids(CATEGORY))
 
 
+# --------------------------------------------- the site-wide newest block
+# rinka_category_live*.html are REAL list pages saved 2026-08-12 at
+# per_page=200. The only change is that whole <div class="ad"> blocks were
+# deleted from the middle of the results container, cutting only at block
+# starts so every byte that remains is the site's own and every structural
+# landmark survives. On the unreduced pages the counts were:
+#
+#   parduodamos-sodybos page 1   96 links -> 86 results + 10 newest
+#   parduodami-namai    page 1  208 links -> 200 results + 10 newest
+#   either category, past the end 10 links ->  0 results
+#
+# The newest block is the same ~10 site-wide adverts on every page of every
+# category, and they can be any property type: the first entry on the saved
+# sodybos page is a 215,000 EUR butas. Ingesting those as sodybos results is
+# how an apartment reached the candidate pool and how source_category came to
+# record a category a listing never came from.
+LIVE_SODYBOS = (FIX / "rinka_category_live.html").read_text(encoding="utf-8")
+LIVE_NAMAI = (FIX / "rinka_category_live_namai.html").read_text(encoding="utf-8")
+PAST_END = (FIX / "rinka_category_past_end.html").read_text(encoding="utf-8")
+
+# The 10 the block carried when these pages were saved.
+NEWEST_BLOCK_IDS = {5080920, 5080903, 5080902, 5080876, 5080869,
+                    5080831, 5080683, 5080682, 5080629, 5080627}
+# Two of those ten are genuinely in parduodami-namai as well, and appear in
+# that page's own results. None of them is in parduodamos-sodybos.
+ALSO_REAL_NAMAI = {5080903, 5080876}
+
+
+def _ids(html):
+    return {i for i, _ in rinka.list_ids(html)}
+
+
+def test_the_newest_adverts_block_is_not_read_as_sodybos_results():
+    ids = _ids(LIVE_SODYBOS)
+    assert ids, "the results were dropped entirely"
+    assert not (ids & NEWEST_BLOCK_IDS), \
+        f"site-wide newest adverts read as category results: {ids & NEWEST_BLOCK_IDS}"
+
+
+def test_the_newest_adverts_block_is_not_read_as_namai_results():
+    # Two of the ten really are namai adverts. The cut is positional, not by
+    # id, so those stay -- excluding them by id would lose real listings.
+    ids = _ids(LIVE_NAMAI)
+    assert ids, "the results were dropped entirely"
+    assert (ids & NEWEST_BLOCK_IDS) == ALSO_REAL_NAMAI
+
+
+def test_a_page_past_the_end_of_a_category_has_no_results():
+    assert _ids(PAST_END) == set(), \
+        "the newest-adverts block was read as if the category still had results"
+
+
+def test_the_boundary_is_reported_as_found_on_a_real_page():
+    assert rinka.results_bounded(LIVE_SODYBOS) is True
+    assert rinka.results_bounded(PAST_END) is True
+
+
+def test_an_unrecognised_page_returns_every_id_rather_than_none():
+    """Degrade toward not losing listings. A wrong category label is bad; a
+    listing that never arrives is worse -- so a page whose newest block
+    cannot be located is read whole, exactly as before this fix."""
+    html = ('<div class="whatever">'
+            '<a href="https://www.rinka.lt/skelbimas/x-id-4242">x</a>'
+            '<a href="https://www.rinka.lt/skelbimas/y-id-4243">y</a></div>')
+    assert rinka.results_bounded(html) is False
+    assert _ids(html) == {4242, 4243}
+
+
+def test_a_heading_inside_the_results_container_does_not_cut_it_short():
+    """The container is told apart by its `cards` class as well as by what
+    follows the opener, so a heading added to the results block cannot be
+    mistaken for the newest-adverts block."""
+    html = ('<div id="adsBlock" class="cards clearfix"><h2>Rezultatai</h2>'
+            '<a href="https://www.rinka.lt/skelbimas/x-id-77">x</a></div>'
+            '<div id="adsBlock"><h2>Naujausi skelbimai</h2>'
+            '<a href="https://www.rinka.lt/skelbimas/y-id-99">y</a></div>')
+    assert _ids(html) == {77}
+
+
+def test_a_renamed_results_class_still_excludes_the_newest_block():
+    """If `cards` is renamed, the heading that opens the newest block still
+    separates them -- neither signal is load-bearing on its own."""
+    html = ('<div id="adsBlock" class="tiles clearfix">'
+            '<div class="ad"><a href="https://www.rinka.lt/skelbimas/x-id-77">x</a></div></div>'
+            '<div id="adsBlock"><h2>Naujausi skelbimai</h2>'
+            '<a href="https://www.rinka.lt/skelbimas/y-id-99">y</a></div>')
+    assert _ids(html) == {77}
+
+
+def test_is_list_page_tells_an_empty_category_from_a_failed_response():
+    """Once the newest block is excluded a page past the end yields zero ids
+    legitimately. The poller must not read that as a rate limiter."""
+    assert rinka.is_list_page(PAST_END) is True
+    assert rinka.is_list_page("<h1>Per daug užklausų</h1>") is False
+
+
 def test_parse_detail_reads_the_price():
     assert rinka.parse_detail(DETAIL, URL)["price_eur"] == 60000.0
 
