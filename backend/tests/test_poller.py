@@ -42,15 +42,24 @@ def _no_sleep(monkeypatch):
     return slept
 
 
+# A page past the end of a category is not empty, and not lower-numbered
+# either: rinka renders a block of the site's newest listings on every page.
+# Measured 2026-08-12 at per_page=200 — sodybos page 1 carried 96 ids, pages
+# 2 and 3 the same 10 (5080920 down to 5080627). So the end-of-category
+# signal is a page that adds nothing new, and this stub reuses an id the
+# fixture already carries. A blank body would instead be a listing-free
+# page, which poller._poll_category treats as a stall.
+_REPEAT = '<a href="https://www.rinka.lt/skelbimas/x-id-5080474">x</a>'
+
+
 def _list_page(url):
-    """The saved fixture is page 1 of the category; past it the site returns
-    an empty page.
+    """The saved fixture is page 1 of the category; past it, only the block.
 
     Serving the fixture for every page number would model a paginator that
-    ignores `page` — rinka does not, and a walk that never runs out of pages
-    hits POLL_MAX_PAGES, which is a stall (see poller._poll_category) and
-    would hold the cursor back in tests that are not about the cap at all."""
-    return CATEGORY if "page=1&" in url else ""
+    ignores `page` — rinka does not, and a walk that never runs out of new
+    ids hits POLL_MAX_PAGES, which is a stall (see poller._poll_category)
+    and would hold the cursor back in tests that are not about the cap."""
+    return CATEGORY if "page=1&" in url else _REPEAT
 
 
 def _fake_fetch(calls):
@@ -144,10 +153,12 @@ def test_a_batch_larger_than_the_limit_is_caught_up_not_skipped():
     cat_html = "".join(
         f'<a href="https://www.rinka.lt/skelbimas/test-id-{i}">x</a>' for i in ids)
 
+    repeat = f'<a href="https://www.rinka.lt/skelbimas/test-id-{ids[-1]}">x</a>'
+
     async def base_fetch(url):
         if "per_page=" not in url:
             return (200, DETAIL)
-        return (200, cat_html if "page=1&" in url else "")
+        return (200, cat_html if "page=1&" in url else repeat)
 
     calls1: list[str] = []
     calls2: list[str] = []

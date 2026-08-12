@@ -123,10 +123,16 @@ CREATE TABLE IF NOT EXISTS source_category_cursor (
 -- Carry an existing single cursor forward as that source's original category
 -- so it resumes instead of re-walking. Guarded, so re-running SCHEMA on every
 -- boot cannot reset a cursor that has since advanced.
+-- rinka only: it is the one source whose single cursor was built by walking
+-- parduodamos-sodybos, so it is the one whose category is known. Labelling
+-- every source's cursor 'sodybos' would invent a provenance -- and the day a
+-- second adapter declares a sodybos category, that invented row would sit as
+-- a high watermark on a category never polled, suppressing exactly the
+-- listings this table exists to stop losing.
 INSERT INTO source_category_cursor(source, category, last_id, etag, modified, polled_at)
 SELECT source, 'sodybos', last_id, etag, modified, polled_at
 FROM source_cursor c
-WHERE NOT EXISTS (
+WHERE c.source = 'rinka' AND NOT EXISTS (
     SELECT 1 FROM source_category_cursor sc
     WHERE sc.source = c.source AND sc.category = 'sodybos'
 );

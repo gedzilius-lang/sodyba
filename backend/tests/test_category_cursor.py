@@ -41,18 +41,35 @@ def test_sodybos_is_seeded_from_the_old_single_cursor():
     # resume where it left off, not re-walk the whole category.
     with connect() as cx:
         cx.execute("DELETE FROM source_category_cursor "
-                   "WHERE source='seedtest' AND category='sodybos'")
-        cx.execute("INSERT INTO source_cursor(source,last_id) VALUES('seedtest','4991510') "
+                   "WHERE source='rinka' AND category='sodybos'")
+        cx.execute("INSERT INTO source_cursor(source,last_id) VALUES('rinka','4991510') "
                    "ON CONFLICT(source) DO UPDATE SET last_id=excluded.last_id")
     init_db()          # re-runs SCHEMA, which carries the seed statement
-    assert poller._cursor("seedtest", "sodybos") == 4991510
+    assert poller._cursor("rinka", "sodybos") == 4991510
+
+
+def test_only_rinkas_cursor_is_labelled_sodybos():
+    """rinka's single cursor was built by walking parduodamos-sodybos, so its
+    category is known. No other source's is, and inventing one would plant a
+    high watermark on a category that source never polled — suppressing
+    exactly the listings this table exists to stop losing."""
+    with connect() as cx:
+        cx.execute("DELETE FROM source_category_cursor WHERE source='othersrc'")
+        cx.execute("INSERT INTO source_cursor(source,last_id) VALUES('othersrc','4991510') "
+                   "ON CONFLICT(source) DO UPDATE SET last_id=excluded.last_id")
+    init_db()
+    assert poller._cursor("othersrc", "sodybos") == 0
+    with connect() as cx:
+        n = cx.execute("SELECT COUNT(*) n FROM source_category_cursor "
+                       "WHERE source='othersrc'").fetchone()["n"]
+    assert n == 0, "the seed guessed a category it could not know"
 
 
 def test_seeding_is_idempotent_and_does_not_clobber_progress():
     with connect() as cx:
-        cx.execute("INSERT INTO source_cursor(source,last_id) VALUES('seedtest2','100') "
+        cx.execute("INSERT INTO source_cursor(source,last_id) VALUES('rinka','100') "
                    "ON CONFLICT(source) DO UPDATE SET last_id=excluded.last_id")
     init_db()
-    poller._save_cursor("seedtest2", "sodybos", 999)
+    poller._save_cursor("rinka", "sodybos", 999)
     init_db()          # a later boot must not reset it back to 100
-    assert poller._cursor("seedtest2", "sodybos") == 999
+    assert poller._cursor("rinka", "sodybos") == 999

@@ -86,19 +86,42 @@ async def _poll_category(source, adapter, key: str, category: str,
     fresh: dict[int, str] = {}
     pages_capped = False
 
-    # Walk every page until one yields no new ids, or POLL_MAX_PAGES stops us.
+    # Walk the category page by page. What the pages actually look like,
+    # measured against the live site 2026-08-12 (per_page=200):
+    #
+    #   sodybos  page 1: 96 ids   page 2: 10 ids   page 3: the same 10 ids
+    #   namai    page 1: 208 ids  page 2: 162 ids  page 3: 10 ids
+    #
+    # Two facts fall out of that, and this loop rests on both:
+    #
+    # 1. The category's own ids DESCEND across pages — page 2 holds lower
+    #    ids than page 1. Until namai was added this was never exercised:
+    #    sodybos is 86 listings, one page, so the walk never had a second
+    #    page to be wrong about. namai (~350) is the first category that
+    #    genuinely paginates.
+    # 2. Every page — including one past the end of the category — also
+    #    renders a fixed block of the ~10 newest listings on the site. So a
+    #    page past the end is NOT empty, and it is not even lower-numbered:
+    #    that block is the TOP of the id range. Testing `if not page_ids`
+    #    against it never fires, which used to walk every category to
+    #    POLL_MAX_PAGES on every run.
+    #
+    # Hence the end-of-category signal is "this page added no ids we did not
+    # already have", not "this page was empty" and not "this page was all
+    # below the cursor" (which is the same thing once `since` filtering has
+    # run). A page carrying NO listing links at all is a different animal
+    # entirely and is handled as a stall below.
     #
     # Do NOT reinstate the obvious optimisation of breaking out once
     # len(fresh) >= limit. It looks like it saves a pointless fetch and it
-    # silently loses listings: list_ids returns ids DESCENDING, so page 2
-    # holds strictly lower ids than page 1 — and the batch below is taken
-    # from the OLDEST end. Stopping the walk early therefore picks a batch
-    # off page 1 and then advances the watermark above every id the
-    # unfetched pages held, so those listings are never offered again on any
-    # future run. Simulated against namai's real shape (352 listings,
-    # per_page=200, limit=40) it lost 152 listings — 43% of the category —
-    # on the first sweep, while reporting status ok and pages_capped False.
-    # List pages are cheap and this walk is already capped; correctness wins.
+    # silently loses listings: the batch below is taken from the OLDEST end,
+    # so stopping the walk early picks a batch off page 1 and then advances
+    # the watermark above every id the unfetched pages held, and those are
+    # never offered again on any future run. Simulated against namai's real
+    # shape (352 listings, per_page=200, limit=40) it lost 152 listings —
+    # 43% of the category — on the first sweep, reporting status ok. List
+    # pages are cheap and this walk is already capped; correctness wins.
+    listing_free_page = None
     for page in range(1, POLL_MAX_PAGES + 1):
         await asyncio.sleep(source.crawl_delay_s)
         status, html = await fetch(adapter.list_url(category, page))
@@ -107,11 +130,22 @@ async def _poll_category(source, adapter, key: str, category: str,
             # `created` is a list on every path -- poll_source extends with it.
             return {"status": "error", "http_status": status,
                     "scanned": 0, "rejected": 0, "created": [],
-                    "pages_capped": False, "stalled_at": None}
-        page_ids = [i_u for i_u in adapter.list_ids(html) if i_u[0] > since]
-        if not page_ids:
+                    "pages_capped": False, "stalled_at": None,
+                    "listing_free_page": None}
+        all_ids = adapter.list_ids(html)
+        if not all_ids:
+            # No listing links whatsoever. Per fact 2 above a real page
+            # always carries some, even past the end of the category, so
+            # this is a rate limiter, a maintenance notice, or a render this
+            # parser does not understand — wearing a 200. Reading it as the
+            # end of the category would advance the watermark over every
+            # lower id on the pages behind it, so it is a stall instead.
+            listing_free_page = page
             break
-        fresh.update(dict(page_ids))          # same id on two pages counts once
+        before = len(fresh)
+        fresh.update({i: u for i, u in all_ids if i > since})
+        if len(fresh) == before:
+            break                    # nothing new here: end of the category
         if page == POLL_MAX_PAGES:
             pages_capped = True
 
@@ -138,12 +172,13 @@ async def _poll_category(source, adapter, key: str, category: str,
     # It stalls one category only: the others keep advancing.
     stalled_at = None
 
-    if pages_capped and fresh:
-        # A capped walk is the same trap as the early stop deleted above, on
-        # the path the cap takes: it stopped part-way down a descending list,
-        # so the pages it never reached hold ids BELOW everything in `batch`.
-        # It cannot establish contiguity from `since` upward, because this
-        # category's true floor is on a page it never saw.
+    if (pages_capped or listing_free_page is not None) and fresh:
+        # Both exits stopped the walk part-way down a descending list
+        # without proving where the category ends, so neither may advance
+        # the watermark — that is the trap the early stop above fell into.
+        # The pages never reached hold ids BELOW everything in `batch`, so
+        # contiguity from `since` upward cannot be established: this
+        # category's true floor is on a page the run never saw.
         #
         # Rather than a second rule, say that in the one the loop already
         # enforces: the run stalled at the lowest id it did fetch, so `high`
@@ -207,7 +242,7 @@ async def _poll_category(source, adapter, key: str, category: str,
 
     return {"status": "ok", "scanned": scanned, "rejected": rejected,
             "created": created, "pages_capped": pages_capped,
-            "stalled_at": stalled_at}
+            "stalled_at": stalled_at, "listing_free_page": listing_free_page}
 
 
 async def poll_source(key: str, fetch: Fetch | None = None,
@@ -241,7 +276,8 @@ async def poll_source(key: str, fetch: Fetch | None = None,
             log.exception("%s/%s poll failed", key, category)
             res = {"status": "error", "error": str(exc)[:400],
                    "scanned": 0, "rejected": 0, "created": [],
-                   "pages_capped": False, "stalled_at": None}
+                   "pages_capped": False, "stalled_at": None,
+                   "listing_free_page": None}
         per_category[category] = {k: v for k, v in res.items() if k != "created"}
         per_category[category]["created"] = len(res.get("created") or [])
         created.extend(res.get("created") or [])
@@ -259,6 +295,13 @@ async def poll_source(key: str, fetch: Fetch | None = None,
         detail += (f"; puslapių riba pasiekta: {', '.join(capped)}"
                    " — kursorius nepajudėjo; taip neturėtų nutikti,"
                    " didinkite SR_POLL_MAX_PAGES")
+    blank = [f"{c} ({r['listing_free_page']} psl.)"
+             for c, r in per_category.items() if r.get("listing_free_page")]
+    if blank:
+        # A 200 with no listing links at all. Not an empty category — see
+        # _poll_category — so the cursor is held and the run says why.
+        detail += (f"; puslapis be skelbimų: {', '.join(blank)}"
+                   " — atsakymas be nuorodų; kursorius nepajudėjo")
     stalls = [f"{c} ties {r['stalled_at']}" for c, r in per_category.items()
               if r.get("stalled_at") is not None]
     if stalls:
