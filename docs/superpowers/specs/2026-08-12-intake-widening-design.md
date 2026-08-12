@@ -132,15 +132,49 @@ unread by the new path — dropping it is not additive and buys nothing.
 `poll_source(key)` iterates the adapter's categories. Per category it walks
 pages from 1 and stops at whichever comes first:
 
-- a page yields no ids above that category's cursor,
-- `POLL_MAX_PER_RUN` fresh ids have been collected — there is no point fetching
-  a further list page whose ids this run will not process, or
-- `POLL_MAX_PAGES` (`SR_POLL_MAX_PAGES`, default 5) is reached, so a
-  pathological or looping response cannot spin.
+- **a page adds no ids the walk did not already have** — the end of the
+  category. This is a healthy, complete walk and the cursor may advance;
+- a page carries **no listing links at all** — not the end of anything (see
+  below). Treated as a stall: the cursor is withheld and the run reports it;
+- `POLL_MAX_PAGES` (`SR_POLL_MAX_PAGES`, default 5) is reached — likewise a
+  stall, for the same reason, and likewise reported.
 
-`POLL_MAX_PER_RUN` (40) applies **per category**, so a full pass costs at most
-80 detail fetches at rinka's declared 2 s delay — under three minutes per hourly
-run. The first sweep of `namai` completes in roughly two runs.
+What the pages actually look like, measured against the live site 2026-08-12
+at `per_page=200`:
+
+| category | page 1 | page 2 | page 3 |
+|---|---|---|---|
+| `sodybos` | 96 ids | 10 ids | the same 10 ids |
+| `namai` | 208 ids | 162 ids | 10 ids |
+
+Two facts follow, and both matter:
+
+1. A category's own ids **descend** across pages.
+2. Every page — including one past the end of the category — also renders a
+   fixed block of the site's ~10 **newest** listings. So a page past the end is
+   neither empty nor lower-numbered; it is the top of the id range.
+
+Fact 2 is why the stop condition is "no new ids" and not "no ids above the
+cursor": the latter never fires against the real site, and every category
+walked to `POLL_MAX_PAGES` on every run. It is also why the listing-free check
+reads the **unfiltered** ids — a page whose listings all sit at or below the
+cursor is the ordinary steady state, not a failure.
+
+**Deliberately not a stop condition:** "`POLL_MAX_PER_RUN` fresh ids collected,
+so stop fetching list pages". An earlier draft of this section specified it. It
+loses listings, because by fact 1 the later pages hold exactly the ids an
+oldest-first batch processes *first* — the run picks its batch off page 1 and
+then advances the watermark above everything the unfetched pages held.
+Simulated against `namai`'s real shape (352 listings, `per_page=200`,
+`limit=40`) it lost 152 listings, 43% of the category, on the first sweep,
+while reporting `status: ok`. List pages are cheap and the walk is already
+capped; collect every page, then take the oldest `limit`.
+
+`POLL_MAX_PER_RUN` (40) applies **per category** to *detail* fetches, so a full
+pass costs at most 80 detail fetches plus a handful of list pages at rinka's
+declared 2 s delay — under three minutes per hourly run. The first sweep of
+`namai` reaches its newest listing in roughly nine runs; it is bounded by
+`POLL_MAX_PER_RUN`, not by pagination.
 
 The contiguous-advance rule is unchanged and now applies per category: the
 cursor advances only across an unbroken run of successes, so a mid-batch failure
@@ -175,8 +209,22 @@ proven** for this case, including that the surviving row keeps the notes trail
   `poll_all`'s existing contract.
 - A detail page failing mid-batch → existing behaviour: counted, cursor stalls
   at that id, retried next run.
-- `POLL_MAX_PAGES` reached → log how many pages were walked and that the cap was
-  hit, so a silently truncated sweep is visible rather than looking complete.
+- `POLL_MAX_PAGES` reached → the walk stopped part-way down a descending list,
+  so the pages it never reached hold ids *below* everything it did fetch and
+  the cursor cannot be advanced without burying them. Expressed as a stall at
+  the lowest fetched id, so the contiguous-advance rule already withholds the
+  watermark; what was fetched is still ingested. The cap is a safety net, not
+  an operating limit (5 × 200 = 1000 against a largest real category of 372),
+  so the run says plainly that the cursor did not move and names
+  `SR_POLL_MAX_PAGES` — a category permanently over the cap makes no progress
+  at all, which is the right trade only if it is loud.
+- A 200 carrying no listing links → same treatment, same reasoning. Per §5.3
+  fact 2 a real page always carries some, so this is a rate limiter, a
+  maintenance notice, or a render the parser does not understand.
+- Every category's list page failing → the run itself reports `error`, not `ok`
+  with the failures buried in the detail text: `/api/ingest/log` surfaces the
+  status column, and a sweep that fetched nothing must not read as healthy.
+  Partial failure stays `ok`; the `categories` map names what failed.
 
 ## 7. Testing
 
@@ -189,8 +237,16 @@ All against an injected fetcher; no network in tests.
 - Migration: a database holding a `source_cursor` row for rinka gains the
   seeded `('rinka','sodybos')` row with the same `last_id`, and running the
   migration twice is a no-op.
-- Pagination: page 2 is fetched when page 1 is full of new ids; walking stops
-  when a page yields nothing new; `POLL_MAX_PAGES` caps and reports.
+- Pagination: page 2 is fetched when page 1 is full of new ids, and the batch
+  is the oldest ids of the **whole** sweep, not of page 1; walking stops when a
+  page adds nothing new; a page past the end of the category (the newest-listings
+  block alone) ends the walk and lets the cursor advance; a page whose listings
+  all sit at or below the cursor does the same and is not mistaken for a failure.
+- Neither exit that stops the walk early may advance the cursor: `POLL_MAX_PAGES`
+  and a listing-free 200 each leave the watermark where it was, still ingest what
+  was fetched, and say so in the run summary.
+- `source_category` is asserted on a row stored by `poll_source` itself, not
+  only on one handed to `_insert` directly — that is the only path that writes it.
 - A category list page failing leaves that cursor untouched while the other
   category still ingests.
 - Cross-category dedupe: the same property under both categories yields one
