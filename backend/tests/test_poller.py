@@ -5,6 +5,7 @@ import pytest
 
 from backend.app.sources import poller
 from backend.app.sources import registry as reg
+from backend.app.sources.adapters import rinka
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
 CATEGORY = (FIX / "rinka_category.html").read_text(encoding="utf-8")
@@ -21,6 +22,7 @@ def _reset():
     from backend.app.db import connect
     with connect() as cx:
         cx.execute("DELETE FROM source_cursor")
+        cx.execute("DELETE FROM source_category_cursor")
         cx.execute("DELETE FROM candidate")
 
 
@@ -40,10 +42,30 @@ def _no_sleep(monkeypatch):
     return slept
 
 
+# A page past the end of a category is not empty, and not lower-numbered
+# either: rinka renders a block of the site's newest listings on every page.
+# Measured 2026-08-12 at per_page=200 — sodybos page 1 carried 96 ids, pages
+# 2 and 3 the same 10 (5080920 down to 5080627). So the end-of-category
+# signal is a page that adds nothing new, and this stub reuses an id the
+# fixture already carries. A blank body would instead be a listing-free
+# page, which poller._poll_category treats as a stall.
+_REPEAT = '<a href="https://www.rinka.lt/skelbimas/x-id-5080474">x</a>'
+
+
+def _list_page(url):
+    """The saved fixture is page 1 of the category; past it, only the block.
+
+    Serving the fixture for every page number would model a paginator that
+    ignores `page` — rinka does not, and a walk that never runs out of new
+    ids hits POLL_MAX_PAGES, which is a stall (see poller._poll_category)
+    and would hold the cursor back in tests that are not about the cap."""
+    return CATEGORY if "page=1&" in url else _REPEAT
+
+
 def _fake_fetch(calls):
     async def fetch(url):
         calls.append(url)
-        return (200, CATEGORY if "per_page=" in url else DETAIL)
+        return (200, _list_page(url) if "per_page=" in url else DETAIL)
     return fetch
 
 
@@ -52,7 +74,7 @@ def _fake_fetch_with_failure(calls, bad_id_substr, bad_status=503):
     async def fetch(url):
         calls.append(url)
         if "per_page=" in url:
-            return (200, CATEGORY)
+            return (200, _list_page(url))
         if bad_id_substr in url:
             return (bad_status, "")
         return (200, DETAIL)
@@ -70,10 +92,16 @@ def test_refuses_an_unknown_source():
 
 
 def test_fetches_the_category_page_then_each_listing():
+    """Every category the adapter declares is walked, not just the first.
+
+    The fixture is one saved sodybos page, and _fake_fetch serves it for any
+    list URL, so each category sees the same three ids — hence three detail
+    fetches per category rather than three in total."""
     calls = []
     asyncio.run(poller.poll_source("rinka", fetch=_fake_fetch(calls)))
     assert "per_page=" in calls[0]
-    assert len([c for c in calls if "/skelbimas/" in c]) == 3
+    assert (len([c for c in calls if "/skelbimas/" in c])
+            == 3 * len(rinka.CATEGORIES))
 
 
 def test_second_run_fetches_nothing_new():
@@ -89,7 +117,8 @@ def test_watermark_is_persisted():
     from backend.app.db import connect
     with connect() as cx:
         row = cx.execute(
-            "SELECT last_id FROM source_cursor WHERE source='rinka'").fetchone()
+            "SELECT last_id FROM source_category_cursor "
+            "WHERE source='rinka' AND category='sodybos'").fetchone()
     assert int(row["last_id"]) == 5080474
 
 
@@ -114,7 +143,8 @@ def test_the_cursor_does_not_advance_past_a_failure():
     from backend.app.db import connect
     with connect() as cx:
         row = cx.execute(
-            "SELECT last_id FROM source_cursor WHERE source='rinka'").fetchone()
+            "SELECT last_id FROM source_category_cursor "
+            "WHERE source='rinka' AND category='sodybos'").fetchone()
     assert int(row["last_id"]) < 5078893
 
 
@@ -123,8 +153,12 @@ def test_a_batch_larger_than_the_limit_is_caught_up_not_skipped():
     cat_html = "".join(
         f'<a href="https://www.rinka.lt/skelbimas/test-id-{i}">x</a>' for i in ids)
 
+    repeat = f'<a href="https://www.rinka.lt/skelbimas/test-id-{ids[-1]}">x</a>'
+
     async def base_fetch(url):
-        return (200, cat_html if "per_page=" in url else DETAIL)
+        if "per_page=" not in url:
+            return (200, DETAIL)
+        return (200, cat_html if "page=1&" in url else repeat)
 
     calls1: list[str] = []
     calls2: list[str] = []

@@ -4,8 +4,12 @@ robots.txt is `User-agent: * / Disallow:` -- fully open. Verified 2026-08-10 and
 recorded in sources/registry.py.
 
 Structure verified against a live listing the same day:
+  * the host serves several property categories, each at its own path under
+    /nekilnojamojo-turto-skelbimai/ -- see CATEGORIES. robots.txt is a
+    property of the host, not of a path, so they share one registry entry and
+    one crawl delay, and the category is named per call to list_url();
   * listing URLs are /skelbimas/<slug>-id-<N>, N numeric and descending, which
-    is why the poller only needs a high-water mark;
+    is why the poller only needs a high-water mark per category;
   * price renders as `Kaina: 60000,00 &euro;` inside <span class="price">;
   * the page nav lists every municipality in the country, so municipality is
     taken from the <h1> and the content block, never from the whole document.
@@ -29,6 +33,17 @@ narrower version of the same fragility this file already avoids elsewhere
 (see the nav dropdown above) -- so _content() instead bounds the slice
 structurally, at the first link to a *different* listing id, using the id
 already carried in the URL every caller passes in.
+
+Fix round 3: the same class of bug on the LIST page. Every list page renders
+a second block of adverts below the results -- the site's ~10 newest, the
+same ones on every page of every category, and of any property type. Because
+list_ids read the whole document, those entered the pipeline as results of
+whichever category was being polled: an apartment could arrive as a sodyba,
+and source_category recorded a category the listing never came from. The
+block is now excluded, bounded structurally the way _content() bounds the
+detail page -- see _ADS_BLOCK_RE for the markup, the two signals used, and
+the measurements. A page whose block cannot be located is still read whole:
+a wrong category label is bad, a listing that never arrives is worse.
 """
 from __future__ import annotations
 import re
@@ -38,9 +53,76 @@ from .. import parsers
 
 KEY = "rinka"
 BASE = "https://www.rinka.lt"
-CATEGORY = "/nekilnojamojo-turto-skelbimai/parduodamos-sodybos"
+# One host, one robots.txt, one crawl delay -- so one registry entry (see
+# sources/registry.py). Categories are a path concern and live here, which is
+# why adding one costs nothing and cannot weaken the policy check.
+CATEGORIES = {
+    "sodybos": "/nekilnojamojo-turto-skelbimai/parduodamos-sodybos",
+    "namai": "/nekilnojamojo-turto-skelbimai/parduodami-namai",
+}
+
+
+class UnknownCategory(KeyError):
+    """A category key this adapter does not declare."""
 
 _LINK_RE = re.compile(r'href="(https://www\.rinka\.lt/skelbimas/[^"?#]*?-id-(\d+))"')
+
+# Every list page renders TWO blocks of adverts, and both use id="adsBlock"
+# (the markup is invalid that way, but it is what the site serves):
+#
+#   <div id="adsBlock" class="cards clearfix">   this category's results
+#       <div class="ad" ...>
+#   <div id="adsBlock">                          the site's newest adverts
+#       <h2>Naujausi skelbimai</h2>
+#       <div class="ad" ...>
+#
+# The second block is the same ~10 site-wide newest adverts on every page of
+# every category, and they can be any property type at all — measured
+# 2026-08-12, the first entry on parduodamos-sodybos page 1 was a 215,000 EUR
+# butas. Reading them as category results is how an apartment reached the
+# sodyba candidate pool, and how source_category came to record a category a
+# listing never came from.
+#
+# The boundary is taken structurally, twice over, for the same reason
+# _content() refuses to match "Visi vartotojo skelbimai" on the detail page:
+# a Lithuanian heading is a translation or a copy edit away from breaking.
+# The newest block is the adsBlock opener that (a) does not carry the results
+# container's `cards` class and (b) opens with a heading element rather than
+# an advert. Either signal alone would be enough today; together they survive
+# the class being renamed (b still fires) and a heading being added inside
+# the results container (a still excludes it).
+#
+# Measured 2026-08-12 at per_page=200:
+#   sodybos page 1  96 links -> 86 results + 10 newest
+#   namai   page 1 208 links -> 200 results + 10 newest, 2 of which are
+#                               genuinely in namai and stay, because the
+#                               cut is positional and not by id
+#   any page past the end of a category: 10 links -> 0 results
+_ADS_BLOCK_RE = re.compile(r'(?is)<div[^>]*\bid="adsBlock"[^>]*>')
+_CARDS_CLASS_RE = re.compile(r'(?i)\bclass="[^"]*\bcards\b')
+_HEADING_AFTER_RE = re.compile(r"(?is)\s*<h[1-6]\b")
+
+# The category-results controller's own furniture: the block carrying the
+# result count ("Rasta 86 skelbimų") and the pagination widget beside it.
+#
+# This is what tells a real category page from the site answering with
+# something else inside the same chrome, and it has to be a POSITIVE signal.
+# The newest-adverts block above is site-wide chrome -- measured 2026-08-13,
+# a request for a category path that does not exist renders the full layout,
+# newest-adverts block included, with no results furniture at all. So
+# "the page had some listing markup" cannot mean "the category answered":
+# that reading makes an error page look like an empty category, which lets
+# the walk end early and the watermark advance over pages never fetched.
+#
+# Either element is accepted. Both were present on every real category page
+# measured -- results pages and pages past the end of a category alike, since
+# the same controller renders both -- and neither was present on the error
+# page, so requiring only one survives a rename without weakening the test.
+# No Lithuanian text is matched: the class names alone separate the cases,
+# so the "Rasta"/"Puslapis" wording stays out of it, as the nav dropdown and
+# the seller-adverts heading do elsewhere in this file.
+_RESULTS_CONTROL_RE = re.compile(r'(?i)<div[^>]*\bclass="[^"]*\blistControlBlock\b')
+_PAGGING_RE = re.compile(r'(?i)<[a-z]+[^>]*\bclass="[^"]*\bpagging\b')
 _H1_RE = re.compile(r"(?is)<h1[^>]*>(.*?)</h1>")
 _H1_OPEN_RE = re.compile(r"(?i)<h1\b")
 _CONTENT_MARK = 'class="price"'
@@ -107,14 +189,85 @@ def _label_value(m: re.Match | None) -> str | None:
     return v if v and v != "-" else None
 
 
-def list_url(page: int = 1, per_page: int = 200) -> str:
-    return f"{BASE}{CATEGORY}?page={page}&per_page={per_page}"
+def list_url(category: str, page: int = 1, per_page: int = 200) -> str:
+    try:
+        path = CATEGORIES[category]
+    except KeyError:
+        raise UnknownCategory(category) from None
+    return f"{BASE}{path}?page={page}&per_page={per_page}"
+
+
+def _newest_block_start(html: str) -> int | None:
+    """Offset where the site-wide newest-adverts block opens, or None.
+
+    None also means "do not cut": see the layout check at the end. Cutting on
+    a page laid out differently from every one measured would silently yield
+    zero listings, and a silent zero is the failure this file exists to
+    avoid, so the ambiguous case falls back to reading the whole page.
+    """
+    text = html or ""
+    start = None
+    for m in _ADS_BLOCK_RE.finditer(text):
+        if _CARDS_CLASS_RE.search(m.group(0)):
+            continue                       # the results container itself
+        if _HEADING_AFTER_RE.match(text, m.end()):
+            start = m.start()
+            break                          # the FIRST one: everything after
+            #                                it is the block and whatever
+            #                                follows the block, never results
+    if start is None:
+        return None
+    for m in _ADS_BLOCK_RE.finditer(text):
+        if _CARDS_CLASS_RE.search(m.group(0)) and m.start() > start:
+            # The results container opens BELOW the newest block. Every page
+            # measured has it above, so this layout is one we do not
+            # understand -- cutting here would discard the results entirely
+            # and report a healthy empty category forever.
+            return None
+    return start
+
+
+def results_bounded(html: str) -> bool:
+    """Whether this page's own results could be told from the newest block.
+
+    False means the page shape changed and list_ids fell back to returning
+    every id it found — the pre-2026-08-13 behaviour, which mislabels the
+    newest block's category but loses nothing. PURE: the caller decides what
+    to say about it, the way main.py reports registry.stale().
+    """
+    return _newest_block_start(html) is not None
+
+
+def is_category_page(html: str) -> bool:
+    """Whether the site's category-results controller rendered this page.
+
+    The poller needs this apart from list_ids(): once the newest-adverts
+    block is excluded, a page past the end of a category yields zero ids
+    legitimately, and that must be told apart from the site answering with
+    something else inside the same chrome. Only a page this returns True for
+    may end the walk on zero results; anything else stalls it.
+
+    Deliberately NOT "does the page contain listing markup". The newest
+    block is chrome and renders on error pages too — see _RESULTS_CONTROL_RE.
+    """
+    text = html or ""
+    return bool(_RESULTS_CONTROL_RE.search(text) or _PAGGING_RE.search(text))
 
 
 def list_ids(html: str) -> list[tuple[int, str]]:
-    """Listing ids and urls, newest first, deduplicated."""
+    """This category's own listing ids and urls, newest first, deduplicated.
+
+    The site-wide newest-adverts block that every page carries is excluded —
+    see _ADS_BLOCK_RE above for why and for the measurements. If that block
+    cannot be located the whole page is read as before: a listing filed under
+    the wrong category is bad, a listing that never arrives is worse.
+    """
+    text = html or ""
+    cut = _newest_block_start(text)
+    if cut is not None:
+        text = text[:cut]
     seen: dict[int, str] = {}
-    for url, num in _LINK_RE.findall(html or ""):
+    for url, num in _LINK_RE.findall(text):
         seen.setdefault(int(num), url)
     return sorted(seen.items(), key=lambda kv: -kv[0])
 

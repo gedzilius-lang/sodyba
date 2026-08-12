@@ -182,3 +182,38 @@ confident wrong value rather than an honest `None`?**
   manually (three sleeps, each exactly rinka's declared 2.0s). This is a
   lawfulness property toward sites that permit crawling and deserves an
   assertion rather than a controller's word.
+
+## Added after the intake-widening branch
+
+- **A9** — **existing candidate rows may record a category they did not come
+  from.** Every rinka list page renders a second block of the site's ~10
+  newest adverts alongside the category's own results, and `list_ids` read
+  both until 2026-08-13. Two consequences, both pre-dating this branch
+  because the block was always on page 1 of `parduodamos-sodybos`:
+  - `candidate.source_category`, added by this branch, is wrong for any row
+    ingested from that block. It is now correct going forward.
+  - Those adverts can be **any** property type — the first entry on the
+    sodybos page saved 2026-08-12 was a 215,000 EUR butas. `JUNK_WORDS` and
+    the price ceiling reject most of them, but that is a filter compensating
+    for an ingestion bug, not the reason the filter exists.
+
+  Not rewritten. Back-labelling would mean re-deriving each stored row's
+  category from a page that no longer exists, and guessing is the confident
+  wrong value this project ranks first. The rows are few and visible: any
+  candidate whose asking price or type looks unlike a homestead is a
+  candidate for this. Delete or archive them by hand if they turn up.
+
+- **E9** — the poller tells "this category has no more pages" from "the site
+  answered with something else" by a positive landmark: the results-count
+  block and the pagination widget that rinka's category controller renders on
+  every category page, results or not. Measured 2026-08-13, a request for a
+  category that does not exist renders the full site chrome — newest-adverts
+  block included — with neither landmark, which is what makes the test work.
+
+  The limit: an error page that reproduced the category's own results
+  furniture would be indistinguishable, and would end the walk. No such page
+  was observed; rinka answers a missing category with 404 (already refused on
+  status) and an out-of-range page with 500. Closing it properly needs a
+  second source of truth for "how many results does this category have" —
+  the count in that block is one — and that is a bigger change than this
+  branch should carry.

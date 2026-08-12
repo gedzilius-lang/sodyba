@@ -72,7 +72,11 @@ def _days_listed(listed_at: Any) -> int | None:
 
 def _row_to_candidate(r) -> dict[str, Any]:
     c = {
-        "id": r["id"], "ref": r["ref"], "source": r["source"], "url": r["url"],
+        "id": r["id"], "ref": r["ref"], "source": r["source"],
+        # NULL for every row the email or paste route wrote, and for every row
+        # stored before the poller walked categories at all. Kept as None so the
+        # UI can say nothing rather than say the wrong thing.
+        "source_category": r["source_category"], "url": r["url"],
         "title": r["title"], "municipality": r["municipality"], "locality": r["locality"],
         "cadastral_no": r["cadastral_no"], "price_eur": r["price_eur"],
         "house_m2": r["house_m2"], "plot_ares": r["plot_ares"],

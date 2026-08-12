@@ -118,19 +118,19 @@ def _next_ref(cx) -> str:
     return f"K{n + 1:03d}"
 
 
-# Column list and parameter tuple must stay in lockstep — 23 bound parameters
-# against 23 `?` placeholders, over 27 columns, with flags/scores/checks
-# defaulted inline and `archived` fixed at 0. Count both sides if you touch
-# this. (Was 20/20 over 24 columns before listed_at, contact_phone and
-# contact_email were added.)
+# Column list and parameter tuple must stay in lockstep — 24 bound parameters
+# against 24 `?` placeholders, over 28 columns, with flags/scores/checks
+# defaulted inline and `archived` fixed at 0. Count all three sides if you
+# touch this. (Was 20/20 over 24 columns before listed_at, contact_phone and
+# contact_email were added, and 23/23 over 27 before source_category.)
 _INSERT_SQL = (
     "INSERT INTO candidate("
     "ref,source,url,title,municipality,locality,cadastral_no,price_eur,house_m2,"
     "plot_ares,auction_ends_at,listed_at,contact_phone,contact_email,"
     "flags_json,scores_json,costs_json,checks_json,"
     "notes,fingerprint,profiles_json,easting,northing,nature_json,"
-    "match_state,misses_json,archived) "
-    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}','{}',?,'{}',?,?,?,?,?,?,?,?,0)"
+    "match_state,misses_json,source_category,archived) "
+    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'{}','{}',?,'{}',?,?,?,?,?,?,?,?,?,0)"
 )
 
 
@@ -262,6 +262,10 @@ def _insert(listing: dict[str, Any], hits: list[str], fp: str,
             json.dumps(nature, ensure_ascii=False),
             state,
             json.dumps(misses or {}, ensure_ascii=False),
+            # Absent for every path but the poller — the email and paste routes
+            # know no category, and NULL says so. A default here would make
+            # every alert-ingested row claim a provenance nobody observed.
+            listing.get("source_category"),
         ))
     return ref
 

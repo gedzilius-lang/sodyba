@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS candidate (
     profiles_json     TEXT NOT NULL DEFAULT '[]',
     match_state       TEXT NOT NULL DEFAULT 'match',
     misses_json       TEXT NOT NULL DEFAULT '{}',
+    source_category   TEXT,
     archived          INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
@@ -105,6 +106,37 @@ CREATE TABLE IF NOT EXISTS source_cursor (
     polled_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- One high-water mark per (source, category). source_cursor held one per
+-- source, which was correct while every source read a single category: point
+-- it at two id streams and the higher one filters out everything below it in
+-- the lower stream, losing those listings permanently.
+CREATE TABLE IF NOT EXISTS source_category_cursor (
+    source    TEXT NOT NULL,
+    category  TEXT NOT NULL,
+    last_id   TEXT,
+    etag      TEXT,
+    modified  TEXT,
+    polled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (source, category)
+);
+
+-- Carry an existing single cursor forward as that source's original category
+-- so it resumes instead of re-walking. Guarded, so re-running SCHEMA on every
+-- boot cannot reset a cursor that has since advanced.
+-- rinka only: it is the one source whose single cursor was built by walking
+-- parduodamos-sodybos, so it is the one whose category is known. Labelling
+-- every source's cursor 'sodybos' would invent a provenance -- and the day a
+-- second adapter declares a sodybos category, that invented row would sit as
+-- a high watermark on a category never polled, suppressing exactly the
+-- listings this table exists to stop losing.
+INSERT INTO source_category_cursor(source, category, last_id, etag, modified, polled_at)
+SELECT source, 'sodybos', last_id, etag, modified, polled_at
+FROM source_cursor c
+WHERE c.source = 'rinka' AND NOT EXISTS (
+    SELECT 1 FROM source_category_cursor sc
+    WHERE sc.source = c.source AND sc.category = 'sodybos'
+);
+
 CREATE TABLE IF NOT EXISTS refresh_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     source     TEXT NOT NULL,
@@ -136,6 +168,11 @@ MIGRATIONS = [
     # -- see the retention comment there.
     ("candidate", "contact_phone", "ALTER TABLE candidate ADD COLUMN contact_phone TEXT"),
     ("candidate", "contact_email", "ALTER TABLE candidate ADD COLUMN contact_email TEXT"),
+    # Nullable, never defaulted, and never back-filled: rows ingested before
+    # categories existed genuinely have no recorded category, and labelling
+    # them by inference would be a guess wearing the clothes of a fact.
+    ("candidate", "source_category",
+     "ALTER TABLE candidate ADD COLUMN source_category TEXT"),
 ]
 
 
