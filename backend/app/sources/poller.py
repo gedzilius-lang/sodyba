@@ -137,6 +137,28 @@ async def _poll_category(source, adapter, key: str, category: str,
     # up after N consecutive stalls), which is out of scope for this task.
     # It stalls one category only: the others keep advancing.
     stalled_at = None
+
+    if pages_capped and fresh:
+        # A capped walk is the same trap as the early stop deleted above, on
+        # the path the cap takes: it stopped part-way down a descending list,
+        # so the pages it never reached hold ids BELOW everything in `batch`.
+        # It cannot establish contiguity from `since` upward, because this
+        # category's true floor is on a page it never saw.
+        #
+        # Rather than a second rule, say that in the one the loop already
+        # enforces: the run stalled at the lowest id it did fetch, so `high`
+        # never leaves `since` and every id here is offered again next run.
+        # The listings are still ingested below — _insert is idempotent
+        # through its fingerprint check, so there is no reason to throw that
+        # work away; only the watermark is withheld.
+        #
+        # A category whose fresh backlog permanently exceeds POLL_MAX_PAGES x
+        # per_page therefore never advances at all. That is the right trade —
+        # standing still beats losing listings — but it must be loud, not
+        # silent, which is why poll_source's log line names the setting to
+        # raise rather than only reporting that the cap was reached.
+        stalled_at = min(fresh)
+
     for listing_id, url in batch:
         await asyncio.sleep(source.crawl_delay_s)
         st, page_html = await fetch(url)
@@ -230,7 +252,13 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     detail = f"{len(created)} nauji; peržiūrėta {scanned} ({parts}); atmesta {rejected}"
     capped = [c for c, r in per_category.items() if r.get("pages_capped")]
     if capped:
-        detail += f"; puslapių riba pasiekta: {', '.join(capped)}"
+        # The cap is a safety net sized well above any real category, so
+        # reaching it means something upstream is wrong — and a capped
+        # category cannot advance its cursor, so it will keep re-fetching the
+        # same head every run until an operator raises the setting. Say both.
+        detail += (f"; puslapių riba pasiekta: {', '.join(capped)}"
+                   " — kursorius nepajudėjo; taip neturėtų nutikti,"
+                   " didinkite SR_POLL_MAX_PAGES")
     stalls = [f"{c} ties {r['stalled_at']}" for c, r in per_category.items()
               if r.get("stalled_at") is not None]
     if stalls:

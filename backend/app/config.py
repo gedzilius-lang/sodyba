@@ -70,6 +70,13 @@ POLL_MAX_PER_RUN = int(os.getenv("SR_POLL_MAX_PER_RUN", "40"))
 # A category is walked page by page until it yields nothing new. The cap stops
 # a pathological or looping response from spinning forever, and a run that hits
 # it says so rather than looking complete.
+#
+# It is a safety net, not an operating limit: 5 pages x per_page=200 is 1000
+# listings, against a largest real category of 372. If it ever fires, something
+# upstream is wrong. A capped run also cannot advance its cursor (the pages it
+# never reached hold lower ids -- see poller._poll_category), so it makes no
+# forward progress until SR_POLL_MAX_PAGES is raised. That stall is deliberate,
+# and the run says so in its log line rather than failing quietly.
 POLL_MAX_PAGES = int(os.getenv("SR_POLL_MAX_PAGES", "5"))
 
 # ---------------------------------------------------------------- notify

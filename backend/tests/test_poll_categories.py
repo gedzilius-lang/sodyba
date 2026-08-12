@@ -64,8 +64,9 @@ def test_a_namai_id_below_the_sodybos_watermark_is_still_ingested(monkeypatch):
     poller._save_cursor("rinka", "sodybos", 5_000_000)
     poller._save_cursor("rinka", "namai", 0)
     fetch, calls = _fetcher({
-        "parduodamos-sodybos": (200, _listing_page([5_000_001])),
-        "parduodami-namai": (200, _listing_page([4_000_001])),
+        "parduodamos-sodybos?page=1": (200, _listing_page([5_000_001])),
+        "parduodami-namai?page=1": (200, _listing_page([4_000_001])),
+        "page=2": (200, _listing_page([])),
     })
     monkeypatch.setattr(poller, "_profiles", lambda: [])
     out = asyncio.run(poller.poll_source("rinka", fetch=fetch, limit=10))
@@ -146,12 +147,47 @@ def test_max_pages_caps_a_never_ending_category(monkeypatch):
     assert "puslapių riba pasiekta: namai" in _last_log()[1]
 
 
+def test_a_capped_walk_leaves_the_cursor_where_it_was(monkeypatch):
+    """The pagination bug again, on the path the cap takes.
+
+    Pages run descending, so the pages a capped walk never reached hold ids
+    BELOW everything it did fetch. Advancing the watermark over the batch
+    buries them exactly as the deleted early stop did. The cap is expressed
+    as a stall at the lowest fetched id, so the contiguous-advance rule the
+    loop already enforces withholds the cursor — and the ids that were
+    fetched are still ingested, because _insert is idempotent."""
+    poller._save_cursor("rinka", "sodybos", 0)
+    poller._save_cursor("rinka", "namai", 0)
+    monkeypatch.setattr(poller, "POLL_MAX_PAGES", 2)
+    fetch, calls = _fetcher({
+        "parduodami-namai?page=1": (200, _listing_page(range(1000, 1020))),
+        "parduodami-namai?page=2": (200, _listing_page(range(980, 1000))),
+        "parduodami-namai?page=3": (200, _listing_page(range(960, 980))),
+        "parduodamos-sodybos": (200, _listing_page([])),
+    })
+    monkeypatch.setattr(poller, "_profiles", lambda: [])
+    out = asyncio.run(poller.poll_source("rinka", fetch=fetch, limit=40))
+
+    assert not any("parduodami-namai?page=3" in c for c in calls), \
+        "the cap never fired, so this test proves nothing"
+    assert poller._cursor("rinka", "namai") == 0, \
+        "the cursor moved above ids on page 3, which was never fetched"
+    assert out["categories"]["namai"]["stalled_at"] == 980
+    # The withheld cursor must not cost the run its work.
+    assert out["categories"]["namai"]["scanned"] == 40
+    detail = _last_log()[1]
+    assert "puslapių riba pasiekta: namai" in detail
+    assert "SR_POLL_MAX_PAGES" in detail, \
+        "a capped category makes no progress — the operator must be told why"
+
+
 def test_one_category_failing_does_not_stop_the_other(monkeypatch):
     poller._save_cursor("rinka", "sodybos", 0)
     poller._save_cursor("rinka", "namai", 7_000_000)
     fetch, calls = _fetcher({
         "parduodamos-sodybos": (503, ""),
-        "parduodami-namai": (200, _listing_page([7_000_001])),
+        "parduodami-namai?page=1": (200, _listing_page([7_000_001])),
+        "parduodami-namai?page=2": (200, _listing_page([])),
     })
     monkeypatch.setattr(poller, "_profiles", lambda: [])
     out = asyncio.run(poller.poll_source("rinka", fetch=fetch, limit=10))

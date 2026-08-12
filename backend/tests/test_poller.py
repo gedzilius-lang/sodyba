@@ -42,10 +42,21 @@ def _no_sleep(monkeypatch):
     return slept
 
 
+def _list_page(url):
+    """The saved fixture is page 1 of the category; past it the site returns
+    an empty page.
+
+    Serving the fixture for every page number would model a paginator that
+    ignores `page` — rinka does not, and a walk that never runs out of pages
+    hits POLL_MAX_PAGES, which is a stall (see poller._poll_category) and
+    would hold the cursor back in tests that are not about the cap at all."""
+    return CATEGORY if "page=1&" in url else ""
+
+
 def _fake_fetch(calls):
     async def fetch(url):
         calls.append(url)
-        return (200, CATEGORY if "per_page=" in url else DETAIL)
+        return (200, _list_page(url) if "per_page=" in url else DETAIL)
     return fetch
 
 
@@ -54,7 +65,7 @@ def _fake_fetch_with_failure(calls, bad_id_substr, bad_status=503):
     async def fetch(url):
         calls.append(url)
         if "per_page=" in url:
-            return (200, CATEGORY)
+            return (200, _list_page(url))
         if bad_id_substr in url:
             return (bad_status, "")
         return (200, DETAIL)
@@ -134,7 +145,9 @@ def test_a_batch_larger_than_the_limit_is_caught_up_not_skipped():
         f'<a href="https://www.rinka.lt/skelbimas/test-id-{i}">x</a>' for i in ids)
 
     async def base_fetch(url):
-        return (200, cat_html if "per_page=" in url else DETAIL)
+        if "per_page=" not in url:
+            return (200, DETAIL)
+        return (200, cat_html if "page=1&" in url else "")
 
     calls1: list[str] = []
     calls2: list[str] = []
