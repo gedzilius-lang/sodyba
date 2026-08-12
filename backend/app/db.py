@@ -105,6 +105,31 @@ CREATE TABLE IF NOT EXISTS source_cursor (
     polled_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- One high-water mark per (source, category). source_cursor held one per
+-- source, which was correct while every source read a single category: point
+-- it at two id streams and the higher one filters out everything below it in
+-- the lower stream, losing those listings permanently.
+CREATE TABLE IF NOT EXISTS source_category_cursor (
+    source    TEXT NOT NULL,
+    category  TEXT NOT NULL,
+    last_id   TEXT,
+    etag      TEXT,
+    modified  TEXT,
+    polled_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (source, category)
+);
+
+-- Carry an existing single cursor forward as that source's original category
+-- so it resumes instead of re-walking. Guarded, so re-running SCHEMA on every
+-- boot cannot reset a cursor that has since advanced.
+INSERT INTO source_category_cursor(source, category, last_id, etag, modified, polled_at)
+SELECT source, 'sodybos', last_id, etag, modified, polled_at
+FROM source_cursor c
+WHERE NOT EXISTS (
+    SELECT 1 FROM source_category_cursor sc
+    WHERE sc.source = c.source AND sc.category = 'sodybos'
+);
+
 CREATE TABLE IF NOT EXISTS refresh_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     source     TEXT NOT NULL,

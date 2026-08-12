@@ -21,6 +21,7 @@ def _reset():
     from backend.app.db import connect
     with connect() as cx:
         cx.execute("DELETE FROM source_cursor")
+        cx.execute("DELETE FROM source_category_cursor")
         cx.execute("DELETE FROM candidate")
 
 
@@ -89,7 +90,8 @@ def test_watermark_is_persisted():
     from backend.app.db import connect
     with connect() as cx:
         row = cx.execute(
-            "SELECT last_id FROM source_cursor WHERE source='rinka'").fetchone()
+            "SELECT last_id FROM source_category_cursor "
+            "WHERE source='rinka' AND category='sodybos'").fetchone()
     assert int(row["last_id"]) == 5080474
 
 
@@ -114,7 +116,8 @@ def test_the_cursor_does_not_advance_past_a_failure():
     from backend.app.db import connect
     with connect() as cx:
         row = cx.execute(
-            "SELECT last_id FROM source_cursor WHERE source='rinka'").fetchone()
+            "SELECT last_id FROM source_category_cursor "
+            "WHERE source='rinka' AND category='sodybos'").fetchone()
     assert int(row["last_id"]) < 5078893
 
 

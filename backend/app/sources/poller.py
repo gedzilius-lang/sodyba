@@ -37,23 +37,25 @@ async def _http_fetch(url: str) -> tuple[int, str]:
         return r.status_code, r.text
 
 
-def _cursor(source: str) -> int:
+def _cursor(source: str, category: str) -> int:
     with connect() as cx:
-        row = cx.execute("SELECT last_id FROM source_cursor WHERE source=?",
-                         (source,)).fetchone()
+        row = cx.execute(
+            "SELECT last_id FROM source_category_cursor "
+            "WHERE source=? AND category=?", (source, category)).fetchone()
     try:
         return int(row["last_id"]) if row and row["last_id"] else 0
     except (TypeError, ValueError):
         return 0
 
 
-def _save_cursor(source: str, last_id: int) -> None:
+def _save_cursor(source: str, category: str, last_id: int) -> None:
     with connect() as cx:
         cx.execute(
-            "INSERT INTO source_cursor(source,last_id,polled_at) "
-            "VALUES(?,?,datetime('now')) ON CONFLICT(source) DO UPDATE SET "
+            "INSERT INTO source_category_cursor(source,category,last_id,polled_at) "
+            "VALUES(?,?,?,datetime('now')) "
+            "ON CONFLICT(source,category) DO UPDATE SET "
             "last_id=excluded.last_id, polled_at=datetime('now')",
-            (source, str(last_id)))
+            (source, category, str(last_id)))
 
 
 def _profiles() -> list[dict[str, Any]]:
@@ -78,7 +80,7 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     fetch = fetch or _http_fetch
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     profiles = _profiles()
-    since = _cursor(key)
+    since = _cursor(key, "sodybos")
     created: list[dict[str, Any]] = []
     scanned = rejected = 0
     high = since
@@ -155,7 +157,7 @@ async def poll_source(key: str, fetch: Fetch | None = None,
                 high = listing_id
 
         if high > since:
-            _save_cursor(key, high)
+            _save_cursor(key, "sodybos", high)
     except reg.PolicyError:
         raise
     except Exception as exc:
