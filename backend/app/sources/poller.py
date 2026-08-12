@@ -86,6 +86,19 @@ async def _poll_category(source, adapter, key: str, category: str,
     fresh: dict[int, str] = {}
     pages_capped = False
 
+    # Walk every page until one yields no new ids, or POLL_MAX_PAGES stops us.
+    #
+    # Do NOT reinstate the obvious optimisation of breaking out once
+    # len(fresh) >= limit. It looks like it saves a pointless fetch and it
+    # silently loses listings: list_ids returns ids DESCENDING, so page 2
+    # holds strictly lower ids than page 1 — and the batch below is taken
+    # from the OLDEST end. Stopping the walk early therefore picks a batch
+    # off page 1 and then advances the watermark above every id the
+    # unfetched pages held, so those listings are never offered again on any
+    # future run. Simulated against namai's real shape (352 listings,
+    # per_page=200, limit=40) it lost 152 listings — 43% of the category —
+    # on the first sweep, while reporting status ok and pages_capped False.
+    # List pages are cheap and this walk is already capped; correctness wins.
     for page in range(1, POLL_MAX_PAGES + 1):
         await asyncio.sleep(source.crawl_delay_s)
         status, html = await fetch(adapter.list_url(category, page))
@@ -99,8 +112,6 @@ async def _poll_category(source, adapter, key: str, category: str,
         if not page_ids:
             break
         fresh.update(dict(page_ids))          # same id on two pages counts once
-        if len(fresh) >= limit:
-            break
         if page == POLL_MAX_PAGES:
             pages_capped = True
 
@@ -192,21 +203,28 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     created: list[dict[str, Any]] = []
     scanned = rejected = 0
 
-    try:
-        for category in adapter.CATEGORIES:
+    for category in adapter.CATEGORIES:
+        # Caught per category, the way poll_all isolates per source. Letting
+        # a later category's exception abort the whole pass would discard the
+        # earlier categories' `created` list — and both callers (api.
+        # ingest_poll, main.scheduled_poll) read only `created`, so those
+        # listings would be inserted and their cursor advanced with the
+        # notification never fired, and never re-offered afterwards.
+        try:
             res = await _poll_category(source, adapter, key, category,
                                        fetch, limit, profiles)
-            per_category[category] = {k: v for k, v in res.items() if k != "created"}
-            per_category[category]["created"] = len(res.get("created") or [])
-            created.extend(res.get("created") or [])
-            scanned += res.get("scanned", 0)
-            rejected += res.get("rejected", 0)
-    except reg.PolicyError:
-        raise
-    except Exception as exc:
-        log.exception("%s poll failed", key)
-        log_refresh(key, "error", str(exc)[:400], 0, started)
-        return {"status": "error", "error": str(exc)}
+        except reg.PolicyError:
+            raise
+        except Exception as exc:
+            log.exception("%s/%s poll failed", key, category)
+            res = {"status": "error", "error": str(exc)[:400],
+                   "scanned": 0, "rejected": 0, "created": [],
+                   "pages_capped": False, "stalled_at": None}
+        per_category[category] = {k: v for k, v in res.items() if k != "created"}
+        per_category[category]["created"] = len(res.get("created") or [])
+        created.extend(res.get("created") or [])
+        scanned += res.get("scanned", 0)
+        rejected += res.get("rejected", 0)
 
     parts = ", ".join(f"{c}: {r['scanned']}" for c, r in per_category.items())
     detail = f"{len(created)} nauji; peržiūrėta {scanned} ({parts}); atmesta {rejected}"
@@ -221,9 +239,17 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     failed = [c for c, r in per_category.items() if r["status"] == "error"]
     if failed:
         detail += f"; nepavyko: {', '.join(failed)}"
-    log_refresh(key, "ok", detail, len(created), started)
+
+    # A sweep in which no category was reachable fetched nothing at all, and
+    # must not report itself healthy: /api/ingest/log surfaces the status
+    # column, so "ok" with the failure buried in the detail text is how a
+    # dead poller goes unnoticed. Partial failure stays "ok" — the categories
+    # that did run really did ingest, and `categories` names the ones that
+    # did not.
+    status = "error" if failed and len(failed) == len(per_category) else "ok"
+    log_refresh(key, status, detail, len(created), started)
     log.info("%s: %s", key, detail)
-    return {"status": "ok", "created": created, "scanned": scanned,
+    return {"status": status, "created": created, "scanned": scanned,
             "rejected": rejected, "categories": per_category}
 
 
