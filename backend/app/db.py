@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS candidate (
     profiles_json     TEXT NOT NULL DEFAULT '[]',
     match_state       TEXT NOT NULL DEFAULT 'match',
     misses_json       TEXT NOT NULL DEFAULT '{}',
+    source_category   TEXT,
     archived          INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
@@ -161,6 +162,11 @@ MIGRATIONS = [
     # -- see the retention comment there.
     ("candidate", "contact_phone", "ALTER TABLE candidate ADD COLUMN contact_phone TEXT"),
     ("candidate", "contact_email", "ALTER TABLE candidate ADD COLUMN contact_email TEXT"),
+    # Nullable, never defaulted, and never back-filled: rows ingested before
+    # categories existed genuinely have no recorded category, and labelling
+    # them by inference would be a guess wearing the clothes of a fact.
+    ("candidate", "source_category",
+     "ALTER TABLE candidate ADD COLUMN source_category TEXT"),
 ]
 
 

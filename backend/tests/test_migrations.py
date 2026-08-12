@@ -48,7 +48,7 @@ CREATE TABLE candidate (
 );
 """
 
-NEW_COLUMNS = ("listed_at", "contact_phone", "contact_email")
+NEW_COLUMNS = ("listed_at", "contact_phone", "contact_email", "source_category")
 
 
 @pytest.fixture
@@ -98,6 +98,10 @@ def test_migrating_an_old_database_preserves_existing_rows(old_database):
     assert row["listed_at"] is None
     assert row["contact_phone"] is None
     assert row["contact_email"] is None
+    # And never back-filled: this row was ingested before the poller read more
+    # than one category, so it genuinely has no recorded category. Labelling it
+    # 'sodybos' by inference would be a guess wearing the clothes of a fact.
+    assert row["source_category"] is None
 
 
 def test_migrating_twice_is_a_no_op(old_database):
@@ -131,10 +135,10 @@ def test_the_insert_column_list_and_placeholders_are_in_lockstep():
     sql = mailbox._INSERT_SQL
     columns = sql.split("candidate(", 1)[1].split(")", 1)[0].split(",")
     values = sql.split("VALUES(", 1)[1].rsplit(")", 1)[0].split(",")
-    assert len(columns) == 27
-    assert len(values) == 27
-    assert values.count("?") == 23
-    for name in ("listed_at", "contact_phone", "contact_email"):
+    assert len(columns) == 28
+    assert len(values) == 28
+    assert values.count("?") == 24
+    for name in ("listed_at", "contact_phone", "contact_email", "source_category"):
         assert name in [c.strip() for c in columns]
 
 
