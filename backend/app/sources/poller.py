@@ -16,7 +16,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from ..config import HTTP_TIMEOUT, HTTP_UA, POLL_MAX_PER_RUN
+from ..config import HTTP_TIMEOUT, HTTP_UA, POLL_MAX_PAGES, POLL_MAX_PER_RUN
 from ..db import connect, log_refresh
 from . import registry as reg
 from . import adapters
@@ -69,6 +69,114 @@ def _profiles() -> list[dict[str, Any]]:
     return [p for p in profiles() if p.get("enabled", True)]
 
 
+async def _poll_category(source, adapter, key: str, category: str,
+                         fetch: Fetch, limit: int,
+                         profiles: list[dict[str, Any]]) -> dict[str, Any]:
+    """One category of one source. Its cursor is its own.
+
+    Every watermark decision below is scoped to `category`: `since`, `high`
+    and `stalled_at` are locals of this call, and the only cursor written is
+    (key, category). That isolation is the point — a namai id numbered below
+    the sodybos watermark must still be ingested.
+    """
+    since = _cursor(key, category)
+    created: list[dict[str, Any]] = []
+    scanned = rejected = 0
+    high = since
+    fresh: dict[int, str] = {}
+    pages_capped = False
+
+    for page in range(1, POLL_MAX_PAGES + 1):
+        await asyncio.sleep(source.crawl_delay_s)
+        status, html = await fetch(adapter.list_url(category, page))
+        if status != 200:
+            # Cursor untouched: this category is simply skipped this run.
+            # `created` is a list on every path -- poll_source extends with it.
+            return {"status": "error", "http_status": status,
+                    "scanned": 0, "rejected": 0, "created": [],
+                    "pages_capped": False, "stalled_at": None}
+        page_ids = [i_u for i_u in adapter.list_ids(html) if i_u[0] > since]
+        if not page_ids:
+            break
+        fresh.update(dict(page_ids))          # same id on two pages counts once
+        if len(fresh) >= limit:
+            break
+        if page == POLL_MAX_PAGES:
+            pages_capped = True
+
+    # ids arrive newest-first. Process the OLDEST new ones first so the cursor
+    # advances contiguously: a batch bigger than `limit` is then caught up over
+    # successive runs instead of having its tail skipped.
+    batch = sorted(fresh.items())[:limit]
+
+    # stalled_at marks the first id in this category's run that could not be
+    # fully ingested (fetch failure or unparseable page). This category's
+    # cursor may only advance across the unbroken run of successes *before*
+    # that id — once something stalls, every id at or after it must be
+    # retried on the next run, or a higher-id sibling processed later in the
+    # same batch would silently carry the watermark past a listing that was
+    # never actually ingested, losing it forever.
+    #
+    # Known limitation, not solved here: a listing that fails *permanently*
+    # (e.g. deleted between the category page and the detail fetch, so it
+    # 404s every run) stalls that category's cursor at that id indefinitely,
+    # and everything above it is refetched on every run. Ingestion still
+    # works — _insert's fingerprint check makes the repeats a no-op — but the
+    # run does needless work. Fixing this needs per-id failure counts (give
+    # up after N consecutive stalls), which is out of scope for this task.
+    # It stalls one category only: the others keep advancing.
+    stalled_at = None
+    for listing_id, url in batch:
+        await asyncio.sleep(source.crawl_delay_s)
+        st, page_html = await fetch(url)
+        if st != 200:
+            if stalled_at is None:
+                stalled_at = listing_id
+            continue
+        scanned += 1
+        listing = adapter.parse_detail(page_html, url)
+        if listing.get("price_eur") is None and listing.get("house_m2") is None:
+            # Not actually a listing (parse failure, redirect, teaser
+            # page) — a failure to ingest just like a bad HTTP status,
+            # so it must not let the cursor pass it either.
+            if stalled_at is None:
+                stalled_at = listing_id
+            continue
+
+        from ..advisor import assess_nature       # local import: avoids a cycle
+        from ..filters import evaluate_all, MATCH, NEAR
+        from ..dedupe import fingerprint
+
+        listing["source_category"] = category
+        listing["nature"] = assess_nature(listing)
+        results = evaluate_all(listing, profiles)
+        hits = [r.key for r in results if r.state == MATCH]
+        nears = [r.key for r in results if r.state == NEAR]
+        if not hits and not nears:
+            rejected += 1
+            if stalled_at is None:
+                high = listing_id
+            continue
+        misses = {r.key: [vars(m) for m in r.misses]
+                  for r in results if r.state in (MATCH, NEAR)}
+        ref = _insert(listing, hits or nears, fingerprint(listing),
+                      "match" if hits else "near", misses)
+        if ref and hits:
+            created.append({"ref": ref, "profiles": hits, **{
+                k: listing.get(k) for k in
+                ("title", "municipality", "locality", "price_eur",
+                 "house_m2", "plot_ares", "url", "source")}})
+        if stalled_at is None:
+            high = listing_id
+
+    if high > since:
+        _save_cursor(key, category, high)
+
+    return {"status": "ok", "scanned": scanned, "rejected": rejected,
+            "created": created, "pages_capped": pages_capped,
+            "stalled_at": stalled_at}
+
+
 async def poll_source(key: str, fetch: Fetch | None = None,
                       limit: int = POLL_MAX_PER_RUN) -> dict[str, Any]:
     """One polling pass over one source. Raises PolicyError if not permitted."""
@@ -80,84 +188,19 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     fetch = fetch or _http_fetch
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     profiles = _profiles()
-    since = _cursor(key, "sodybos")
+    per_category: dict[str, Any] = {}
     created: list[dict[str, Any]] = []
     scanned = rejected = 0
-    high = since
 
     try:
-        # One category for now; Task 3 makes this loop over adapter.CATEGORIES.
-        status, html = await fetch(adapter.list_url("sodybos"))
-        if status != 200:
-            log_refresh(key, "error", f"sąrašo puslapis grąžino {status}", 0, started)
-            return {"status": "error", "http_status": status}
-
-        # ids arrive newest-first. Process the OLDEST new ones first so the
-        # cursor advances contiguously: a batch bigger than `limit` is then
-        # caught up over successive runs instead of having its tail skipped.
-        fresh = sorted(i_u for i_u in adapter.list_ids(html) if i_u[0] > since)[:limit]
-
-        # stalled_at marks the first id in this run that could not be fully
-        # ingested (fetch failure or unparseable page). The cursor may only
-        # advance across the unbroken run of successes *before* that id —
-        # once something stalls, every id at or after it must be retried on
-        # the next run, or a higher-id sibling processed later in the same
-        # batch would silently carry the watermark past a listing that was
-        # never actually ingested, losing it forever.
-        #
-        # Known limitation, not solved here: a listing that fails
-        # *permanently* (e.g. deleted between the category page and the
-        # detail fetch, so it 404s every run) stalls the cursor at that id
-        # indefinitely, and everything above it is refetched on every run.
-        # Ingestion still works — _insert's fingerprint check makes the
-        # repeats a no-op — but the run does needless work. Fixing this
-        # needs per-id failure counts (give up after N consecutive stalls),
-        # which is out of scope for this task.
-        stalled_at = None
-        for listing_id, url in fresh:
-            await asyncio.sleep(source.crawl_delay_s)
-            st, page = await fetch(url)
-            if st != 200:
-                if stalled_at is None:
-                    stalled_at = listing_id
-                continue
-            scanned += 1
-            listing = adapter.parse_detail(page, url)
-            if listing.get("price_eur") is None and listing.get("house_m2") is None:
-                # Not actually a listing (parse failure, redirect, teaser
-                # page) — a failure to ingest just like a bad HTTP status,
-                # so it must not let the cursor pass it either.
-                if stalled_at is None:
-                    stalled_at = listing_id
-                continue
-
-            from ..advisor import assess_nature       # local import: avoids a cycle
-            from ..filters import evaluate_all, MATCH, NEAR
-            from ..dedupe import fingerprint
-
-            listing["nature"] = assess_nature(listing)
-            results = evaluate_all(listing, profiles)
-            hits = [r.key for r in results if r.state == MATCH]
-            nears = [r.key for r in results if r.state == NEAR]
-            if not hits and not nears:
-                rejected += 1
-                if stalled_at is None:
-                    high = listing_id
-                continue
-            misses = {r.key: [vars(m) for m in r.misses]
-                      for r in results if r.state in (MATCH, NEAR)}
-            ref = _insert(listing, hits or nears, fingerprint(listing),
-                          "match" if hits else "near", misses)
-            if ref and hits:
-                created.append({"ref": ref, "profiles": hits, **{
-                    k: listing.get(k) for k in
-                    ("title", "municipality", "locality", "price_eur",
-                     "house_m2", "plot_ares", "url", "source")}})
-            if stalled_at is None:
-                high = listing_id
-
-        if high > since:
-            _save_cursor(key, "sodybos", high)
+        for category in adapter.CATEGORIES:
+            res = await _poll_category(source, adapter, key, category,
+                                       fetch, limit, profiles)
+            per_category[category] = {k: v for k, v in res.items() if k != "created"}
+            per_category[category]["created"] = len(res.get("created") or [])
+            created.extend(res.get("created") or [])
+            scanned += res.get("scanned", 0)
+            rejected += res.get("rejected", 0)
     except reg.PolicyError:
         raise
     except Exception as exc:
@@ -165,13 +208,23 @@ async def poll_source(key: str, fetch: Fetch | None = None,
         log_refresh(key, "error", str(exc)[:400], 0, started)
         return {"status": "error", "error": str(exc)}
 
-    detail = f"{len(created)} nauji; peržiūrėta {scanned}; atmesta {rejected}"
-    if stalled_at is not None:
-        detail += f"; kursorius sustabdytas ties {stalled_at} — bus bandoma dar kartą"
+    parts = ", ".join(f"{c}: {r['scanned']}" for c, r in per_category.items())
+    detail = f"{len(created)} nauji; peržiūrėta {scanned} ({parts}); atmesta {rejected}"
+    capped = [c for c, r in per_category.items() if r.get("pages_capped")]
+    if capped:
+        detail += f"; puslapių riba pasiekta: {', '.join(capped)}"
+    stalls = [f"{c} ties {r['stalled_at']}" for c, r in per_category.items()
+              if r.get("stalled_at") is not None]
+    if stalls:
+        detail += (f"; kursorius sustabdytas ({', '.join(stalls)})"
+                   " — bus bandoma dar kartą")
+    failed = [c for c, r in per_category.items() if r["status"] == "error"]
+    if failed:
+        detail += f"; nepavyko: {', '.join(failed)}"
     log_refresh(key, "ok", detail, len(created), started)
     log.info("%s: %s", key, detail)
-    return {"status": "ok", "created": created,
-            "scanned": scanned, "rejected": rejected}
+    return {"status": "ok", "created": created, "scanned": scanned,
+            "rejected": rejected, "categories": per_category}
 
 
 async def poll_all(fetch: Fetch | None = None) -> dict[str, Any]:

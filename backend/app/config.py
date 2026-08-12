@@ -67,6 +67,10 @@ MAILBOX_POLL_MINUTES = int(os.getenv("SR_MAILBOX_POLL_MINUTES", "15"))
 # Only sources declared POLL in sources/registry.py are ever fetched.
 POLL_MINUTES = int(os.getenv("SR_POLL_MINUTES", "60"))
 POLL_MAX_PER_RUN = int(os.getenv("SR_POLL_MAX_PER_RUN", "40"))
+# A category is walked page by page until it yields nothing new. The cap stops
+# a pathological or looping response from spinning forever, and a run that hits
+# it says so rather than looking complete.
+POLL_MAX_PAGES = int(os.getenv("SR_POLL_MAX_PAGES", "5"))
 
 # ---------------------------------------------------------------- notify
 TELEGRAM_TOKEN = os.getenv("SR_TELEGRAM_TOKEN", "")

@@ -5,6 +5,7 @@ import pytest
 
 from backend.app.sources import poller
 from backend.app.sources import registry as reg
+from backend.app.sources.adapters import rinka
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
 CATEGORY = (FIX / "rinka_category.html").read_text(encoding="utf-8")
@@ -71,10 +72,16 @@ def test_refuses_an_unknown_source():
 
 
 def test_fetches_the_category_page_then_each_listing():
+    """Every category the adapter declares is walked, not just the first.
+
+    The fixture is one saved sodybos page, and _fake_fetch serves it for any
+    list URL, so each category sees the same three ids — hence three detail
+    fetches per category rather than three in total."""
     calls = []
     asyncio.run(poller.poll_source("rinka", fetch=_fake_fetch(calls)))
     assert "per_page=" in calls[0]
-    assert len([c for c in calls if "/skelbimas/" in c]) == 3
+    assert (len([c for c in calls if "/skelbimas/" in c])
+            == 3 * len(rinka.CATEGORIES))
 
 
 def test_second_run_fetches_nothing_new():
