@@ -147,6 +147,77 @@ _PUNCT_RUN_RE = re.compile(r"[.,]\s+(?=[.,])")
 _LABEL_MUNI_RE = re.compile(r"Miestas\s*/\s*Rajonas\s*:\s*(.+)")
 _LABEL_LOC_RE = re.compile(r"Mikrorajonas\s*/\s*Gyvenvietė\s*:\s*(.+)")
 
+# ------------------------------------------------------------- self-identity
+# Every real advert page declares which advert it is, at document level, twice
+# over:
+#
+#     <meta name="advertisement-id" content="4992805" />
+#     <meta property="og:url" content=".../skelbimas/<slug>-id-4992805"/>
+#
+# Measured 2026-08-13 against the live site: both present on ids 4992805 and
+# 4924114 (and on the page saved 2026-08-10 as rinka_detail_live.html, so the
+# landmark is not new); NEITHER present on any of three pages that are not
+# adverts — the 404 body served for a missing id, the site root, and a category
+# path that does not exist.
+#
+# This is the only honest way to tell "the advert we asked for" from "whatever
+# the site served instead", and nothing in the parsed payload can stand in for
+# it. Those three non-advert pages all render the site-wide newest-adverts
+# block, and reading one of them whole yields price 215000 EUR, 104.42 m2,
+# 25.13 a and a municipality — a FULLER row than the genuine listing at
+# 4992805, which carries no price and no floor area at all. So any rule that
+# counts populated fields ranks the error page above the listing, and the rule
+# that used to live in poller._poll_category ("no price and no floor area
+# means this is not a listing") did exactly that: it admitted the error page
+# and refused the homestead.
+#
+# Both metas sit in <head>, one per document. That is what makes them safe:
+# `data-advertisement-id` is on the page too, but once per advert CARD, so on
+# a page carrying the newest-adverts block it hands back a stranger's id.
+_META_TAG_RE = re.compile(r"(?is)<meta\b[^>]*>")
+_META_AD_ID_RE = re.compile(r'(?i)\bname\s*=\s*"advertisement-id"')
+_META_OG_URL_RE = re.compile(r'(?i)\bproperty\s*=\s*"og:url"')
+_META_CONTENT_RE = re.compile(r'(?i)\bcontent\s*=\s*"([^"]*)"')
+
+# ---------------------------------------------------------------- the price
+# rinka renders the asking price inside <span class="price"> — "Kaina:
+# 60000,00 &euro;". That element is the page's own authoritative value, so it
+# is read first and free text is only the fallback: the same
+# labelled-field-before-free-text precedence municipality, locality and the
+# phone number already follow in this file.
+#
+# It HAS to be read structurally, because parsers.PRICE_RE cannot see a price
+# below 100 EUR at all — its bare digit run is \d{3,8}, a floor inherited from
+# a pattern built to find thousands-separated prices in running prose. That
+# floor is an accident, not a rule: nothing anywhere states that a small number
+# is an implausible price, and relying on it is dangerous precisely because it
+# looks like it works. Widen PRICE_RE to \d{1,8} some day — an entirely
+# reasonable-looking change — and every advert printing "Kaina: 1,00 EUR"
+# starts storing price_eur = 1.0. That is the worst outcome on offer here:
+# mailbox._insert copies the price into costs_json["purchase"], and the whole
+# project ranks on EUR per score point, so a placeholder would sit at the top
+# of the list as the cheapest homestead in Lithuania.
+#
+# So the rule is stated rather than inherited. Measured 2026-08-13, ids
+# 4992805 and 4924114 both print "Kaina: 1,00 &euro;" — the nominal placeholder
+# some sellers use instead of naming a price. A euro is not an asking price for
+# a house, and None (unknown) is the honest reading: filters already treat an
+# unknown as a reject rather than a match, and scoring leaves the purchase cost
+# at the operator's own default.
+#
+# Nothing is dropped silently. `raw` carries the page's own text, and
+# mailbox._insert stores it as the candidate's `notes`, so "Kaina: 1,00 €" is
+# on the row for the operator to read.
+NOMINAL_PRICE_MAX_EUR = 100.0
+_PRICE_SPAN_RE = re.compile(
+    r'(?is)<span[^>]*\bclass="[^"]*\bprice\b[^"]*"[^>]*>(.*?)</span>')
+#
+# NBSP and the euro sign are written as escapes so this line stays pure
+# ASCII and cannot be mangled by an editor's encoding, the same rule
+# parsers.PRICE_RE follows for the same reason.
+_PRICE_VALUE_RE = re.compile(
+    r"(\d[\d  .]*?)(?:,(\d{1,2}))?\s*(?:€|EUR)", re.I)
+
 # The date the advert went online sits in the <div class="infoBlock"> beside
 # the location, each field introduced by a material-icons glyph:
 #     <i ...>&#xE55F;</i> Prienų r. |  <i ...>&#xE878;</i> 2021 07 05 |
@@ -187,6 +258,76 @@ def _label_value(m: re.Match | None) -> str | None:
         return None
     v = m.group(1).strip()
     return v if v and v != "-" else None
+
+
+def declared_listing_id(html: str) -> int | None:
+    """The advert id this page declares itself to be, or None. PURE.
+
+    None means "this document does not say it is an advert" — a 404 body, the
+    site root, an error page inside the site chrome — and the poller refuses
+    to ingest such a page as the listing it asked for. See the _META_* block
+    above for the two landmarks, the measurements, and why no rule over the
+    parsed payload can answer this question.
+
+    The site's own `advertisement-id` wins over og:url when both are present:
+    it is the value rinka states about the advert, while og:url is a link
+    whose id has to be re-derived from a slug.
+    """
+    og: int | None = None
+    for tag in _META_TAG_RE.finditer(html or ""):
+        text = tag.group(0)
+        content = _META_CONTENT_RE.search(text)
+        if not content:
+            continue
+        if _META_AD_ID_RE.search(text):
+            value = content.group(1).strip()
+            if value.isdigit():
+                return int(value)
+        elif og is None and _META_OG_URL_RE.search(text):
+            og = _listing_id(content.group(1))
+    return og
+
+
+def _price_value(text: str) -> float | None:
+    """A euro amount written the way rinka writes it, or None. PURE.
+
+    Handles the thousands separators the site uses (space, NBSP or full
+    stop) and the two-decimal tail it always prints, so "60 000,00 EUR",
+    "60.000 EUR" and "1,00 EUR" all read correctly. Unlike
+    parsers.PRICE_RE it has no minimum digit count: telling a nominal
+    placeholder from a real asking price is a decision, taken once and
+    named in _price(), not a side effect of what a regex happens to see.
+    """
+    m = _PRICE_VALUE_RE.search(text or "")
+    if not m:
+        return None
+    whole = re.sub(r"\D", "", m.group(1))
+    if not whole:
+        return None
+    return float(f"{whole}.{m.group(2)}" if m.group(2) else whole)
+
+
+def _price(content_html: str, body: str) -> float | None:
+    """The asking price in EUR, or None when the page names none. PURE.
+
+    Reads the site's own <span class="price"> first and falls back to free
+    text only when the page carries no price element at all. A price element
+    that is PRESENT is authoritative even when nothing parses out of it: a
+    number scraped from the description instead would be a guess dressed as
+    the seller's asking price, exactly as an unrecognised "Miestas / Rajonas"
+    label yields None rather than falling through to a free-text municipality.
+
+    A value below NOMINAL_PRICE_MAX_EUR is a placeholder, not a price, and
+    comes back None — unknown. See the NOMINAL_PRICE_MAX_EUR block above.
+    """
+    span = _PRICE_SPAN_RE.search(content_html or "")
+    if span:
+        value = _price_value(parsers.to_text(span.group(1)))
+    else:
+        value = parsers._f(parsers.PRICE_RE.search(body))
+    if value is None or value < NOMINAL_PRICE_MAX_EUR:
+        return None
+    return value
 
 
 def list_url(category: str, page: int = 1, per_page: int = 200) -> str:
@@ -400,6 +541,13 @@ def parse_detail(html: str, url: str) -> dict[str, Any]:
 
     d["listed_at"] = _listed_at(content)
     d["contact_phone"], d["contact_email"] = _contacts(content, body)
+    d["price_eur"] = _price(content, body)
+
+    # Which advert this page says it is -- NOT which advert the caller asked
+    # for. The two are compared by poller._is_the_listing, and the whole point
+    # is that they can differ: a redirect, a 404 body or an error page inside
+    # the site chrome answers with 200 and no identity of its own.
+    d["listing_id"] = declared_listing_id(html)
 
     d["source"] = KEY
     d["url"] = url

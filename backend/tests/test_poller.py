@@ -52,6 +52,19 @@ def _no_sleep(monkeypatch):
 _REPEAT = '<a href="https://www.rinka.lt/skelbimas/x-id-5080474">x</a>'
 
 
+def _detail_for(url):
+    """The saved detail body, declaring itself to be the advert `url` names.
+
+    Every real rinka advert page carries `<meta name="advertisement-id">`, and
+    the poller ingests a page only if that id is the one it asked for (see
+    poller._is_the_listing). A stub without it is not a stub of a rinka advert
+    at all — it is a stub of the 404 body the site serves instead — so the
+    fetchers below have to state the identity the real pages state.
+    """
+    return (f'<meta name="advertisement-id" content="{url.rsplit("-id-", 1)[1]}" />'
+            + DETAIL)
+
+
 def _list_page(url):
     """The saved fixture is page 1 of the category; past it, only the block.
 
@@ -65,7 +78,7 @@ def _list_page(url):
 def _fake_fetch(calls):
     async def fetch(url):
         calls.append(url)
-        return (200, _list_page(url) if "per_page=" in url else DETAIL)
+        return (200, _list_page(url) if "per_page=" in url else _detail_for(url))
     return fetch
 
 
@@ -77,7 +90,7 @@ def _fake_fetch_with_failure(calls, bad_id_substr, bad_status=503):
             return (200, _list_page(url))
         if bad_id_substr in url:
             return (bad_status, "")
-        return (200, DETAIL)
+        return (200, _detail_for(url))
     return fetch
 
 
@@ -157,7 +170,7 @@ def test_a_batch_larger_than_the_limit_is_caught_up_not_skipped():
 
     async def base_fetch(url):
         if "per_page=" not in url:
-            return (200, DETAIL)
+            return (200, _detail_for(url))
         return (200, cat_html if "page=1&" in url else repeat)
 
     calls1: list[str] = []

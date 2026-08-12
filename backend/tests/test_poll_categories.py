@@ -41,6 +41,19 @@ DETAIL = (
     "<div>Sklypas: 50,00 a. Utenos r. Antažilių k.</div>")
 
 
+def _detail_for(url, detail=None):
+    """`detail`, declaring itself to be the advert `url` names.
+
+    Every real rinka advert page carries `<meta name="advertisement-id">`, and
+    the poller ingests a page only if that id is the one it asked for (see
+    poller._is_the_listing). A stub without it is not a stub of a rinka advert
+    at all — it is a stub of the 404 body the site serves instead — so every
+    fetcher in this file has to state the identity the real pages state.
+    """
+    return (f'<meta name="advertisement-id" content="{url.rsplit("-id-", 1)[1]}" />'
+            + (DETAIL if detail is None else detail))
+
+
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
     """Same reason as test_poller.py: a real 2s pause per fetch, and there are
@@ -65,7 +78,7 @@ def _fetcher(pages, detail=DETAIL):
         for frag, resp in pages.items():
             if frag in url:
                 return resp
-        return (200, detail)
+        return (200, _detail_for(url, detail))
 
     return fetch, calls
 
@@ -157,7 +170,7 @@ def test_max_pages_caps_a_never_ending_category(monkeypatch):
         if "parduodamos-sodybos" in url:
             return (200, _listing_page([QUIET_ID]))
         if "/skelbimas/" in url:
-            return (200, DETAIL)
+            return (200, _detail_for(url))
         counter["n"] += 1                     # every page looks fresh
         return (200, _listing_page([counter["n"]]))
 
@@ -300,7 +313,8 @@ def test_a_polled_listing_stores_the_category_it_came_from(monkeypatch):
 
     async def fetch(url):
         if "/skelbimas/" in url:
-            return (200, _SODYBA_DETAIL if "id-8100001" in url else _NAMAS_DETAIL)
+            return (200, _detail_for(
+                url, _SODYBA_DETAIL if "id-8100001" in url else _NAMAS_DETAIL))
         if "parduodamos-sodybos" in url:
             return (200, _listing_page([8_100_001]) if "page=1" in url
                     else _past_the_end(8_100_001))
@@ -370,7 +384,7 @@ def _real_page_fetcher(page_two):
     async def fetch(url):
         calls.append(url)
         if "/skelbimas/" in url:
-            return (200, DETAIL)
+            return (200, _detail_for(url))
         if "parduodamos-sodybos" in url:
             return (200, LIVE_SODYBOS if "page=1" in url else page_two)
         return (200, _listing_page([QUIET_ID]))
@@ -468,7 +482,7 @@ def test_a_stalled_category_is_named_in_the_run_summary(monkeypatch):
 
     async def fetch(url):
         if "/skelbimas/" in url:
-            return (503, "") if "id-501" in url else (200, DETAIL)
+            return (503, "") if "id-501" in url else (200, _detail_for(url))
         if "parduodamos-sodybos" in url:
             return (200, _listing_page([500, 501, 502] if "page=1" in url
                                        else [502]))
@@ -495,7 +509,7 @@ def test_an_exception_in_one_category_keeps_the_others_results(monkeypatch):
         if "parduodami-namai" in url:
             raise RuntimeError("adapteris netikėtai lūžo")
         if "/skelbimas/" in url:
-            return (200, DETAIL)
+            return (200, _detail_for(url))
         if "page=1" in url:
             return (200, _listing_page([600]))
         return (200, _past_the_end(600))

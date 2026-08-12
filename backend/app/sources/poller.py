@@ -80,6 +80,52 @@ def _results_bounded(adapter: Any, html: str) -> bool:
     return bool(fn(html)) if fn else True
 
 
+def _is_the_listing(listing: dict[str, Any], listing_id: int) -> bool:
+    """Whether the page the adapter read declares itself to be advert `listing_id`.
+
+    This is the test for "did we actually get the listing", and it is asked of
+    the page's own identity, never of the fields parsed out of it.
+
+    THE RULE THIS REPLACED WAS BACKWARDS. It was `price_eur is None and
+    house_m2 is None` -> not a listing, and both halves of it were wrong,
+    measured 2026-08-13 against the live site:
+
+      * id 4992805 is a real sodybos advert -- an abandoned homestead, 33 ares
+        in Rokiskio rajono, listed 2023-01-15, the operator's thesis exactly.
+        It names no price ("Kaina: 1,00 EUR", a nominal placeholder) and no
+        floor area, so the rule called it a parse failure. Its cursor stalled
+        there and no sodybos listing newer than it had EVER been ingested: the
+        watermark sat at 4991510 while the category's newest was 5080920.
+      * rinka's 404 body -- a genuine non-listing, the case the guard exists
+        for -- renders the site-wide newest-adverts block, so parsing it whole
+        yields price 215000 EUR, 104.42 m2, 25.13 a and a municipality. The
+        rule PASSED it. A fuller row than the real listing it refused.
+
+    So no rule counting populated fields can work here: the error page scores
+    higher than the homestead. Optional fields describe a property; they
+    cannot answer whether a property was described at all.
+
+    What can: the advert's own identity. Every real rinka detail page declares
+    which advert it is, at document level, and no non-advert page does -- see
+    adapters/rinka.declared_listing_id for the two landmarks and the pages
+    they were measured against. Comparing that to the id we asked for also
+    closes the redirect hole the old guard was written for and did not close:
+    a page that is a perfectly good advert, but a DIFFERENT one, is refused
+    rather than stored under the requested listing's URL.
+
+    An adapter that reports no identity fails this for every listing. That is
+    deliberate -- silence must not read as consent when the answer decides
+    whether a page enters the pipeline -- and it is loud: nothing ingests, the
+    run's log line names the ids, and they land in poll_failure. Reporting
+    `listing_id` is part of the adapter contract, see AGENT.md section 9.
+    """
+    declared = listing.get("listing_id")
+    try:
+        return declared is not None and int(declared) == listing_id
+    except (TypeError, ValueError):
+        return False
+
+
 def _profiles() -> list[dict[str, Any]]:
     # api.profiles() is the single resolution of stored profiles against the
     # code presets (filters.resolve_profiles). Reading the setting directly
@@ -241,10 +287,11 @@ async def _poll_category(source, adapter, key: str, category: str,
             continue
         scanned += 1
         listing = adapter.parse_detail(page_html, url)
-        if listing.get("price_eur") is None and listing.get("house_m2") is None:
-            # Not actually a listing (parse failure, redirect, teaser
-            # page) — a failure to ingest just like a bad HTTP status,
-            # so it must not let the cursor pass it either.
+        if not _is_the_listing(listing, listing_id):
+            # The site answered 200 with something that is not this advert
+            # (redirect, 404 body, teaser, error page inside the chrome) — a
+            # failure to ingest just like a bad HTTP status, so it must not
+            # let the cursor pass it either. See _is_the_listing.
             if stalled_at is None:
                 stalled_at = listing_id
             continue

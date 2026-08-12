@@ -296,7 +296,13 @@ The ranking metric is therefore **EUR per score point**, not price.
   add a `Source(...)` to `sources/registry.py` with today's date as
   `checked_at` and the verdict in the site's own words; write an adapter under
   `sources/adapters/` exposing `list_url()`, `list_ids(html)` and
-  `parse_detail(html, url)`, all pure; register it in the `ADAPTERS` dict in
+  `parse_detail(html, url)`, all pure — and `parse_detail` **must return
+  `listing_id`: the id the PAGE declares itself to be**, not the id in the URL
+  it was handed. The poller compares the two and ingests nothing that does not
+  identify itself as the advert it asked for, because no rule over the parsed
+  fields can do that job (see `poller._is_the_listing`). An adapter that omits
+  the key ingests nothing at all — deliberately, and loudly.
+  Then register it in the `ADAPTERS` dict in
   `sources/adapters/__init__.py`; add the key to `poller.POLLED`. Skip the
   registry step and `assert_pollable` refuses the source outright — that is the
   intended behaviour, not an obstacle to route around. Skip the `ADAPTERS`
