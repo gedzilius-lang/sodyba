@@ -59,6 +59,7 @@ Test results that must still hold after any change you make:
 | Mailbox dedupe | second poll of the same alerts creates 0 new rows |
 | Cross-source dedupe | a duplicate merges into one row and leaves a `[dublikatas …]` note; a match landing on a stored near-miss **promotes** it and is notified; an archived row never absorbs a live listing |
 | Poller watermark | the cursor advances only across contiguous successes, and pauses for the `crawl_delay_s` its `Source` declares |
+| A listing that always fails | retried, then given up on after `SR_POLL_GIVE_UP_AFTER` consecutive failures — recorded in `poll_failure`, named in the run's log line, listed by `GET /api/ingest/abandoned`; only then may the cursor pass it |
 | Unknown data | never reported as a negative finding, and never shown as a near miss (`delta is None` ⇒ reject) |
 | Projection round trip | exact; Vilnius–Klaipėda `287.1 km` |
 

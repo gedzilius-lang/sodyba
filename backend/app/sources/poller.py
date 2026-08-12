@@ -16,7 +16,8 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
-from ..config import HTTP_TIMEOUT, HTTP_UA, POLL_MAX_PAGES, POLL_MAX_PER_RUN
+from ..config import (HTTP_TIMEOUT, HTTP_UA, POLL_GIVE_UP_AFTER,
+                      POLL_MAX_PAGES, POLL_MAX_PER_RUN)
 from ..db import connect, log_refresh
 from . import registry as reg
 from . import adapters
@@ -56,6 +57,87 @@ def _save_cursor(source: str, category: str, last_id: int) -> None:
             "ON CONFLICT(source,category) DO UPDATE SET "
             "last_id=excluded.last_id, polled_at=datetime('now')",
             (source, category, str(last_id)))
+
+
+def _failed_before(source: str, category: str) -> tuple[set[int], set[int]]:
+    """(ids with a failure on record, ids given up on) for this category.
+
+    One query, read once per category run. The first set exists only to keep
+    a successful run from issuing a pointless DELETE for every listing it
+    reads; the second is the one that changes behaviour, and it is applied to
+    the batch rather than to the page walk — a page carrying only abandoned
+    ids must still read as "nothing new" the way it always did, or the walk
+    ends early and takes the watermark with it.
+    """
+    with connect() as cx:
+        rows = cx.execute(
+            "SELECT listing_id, given_up_at FROM poll_failure "
+            "WHERE source=? AND category=?", (source, category)).fetchall()
+    recorded = {int(r["listing_id"]) for r in rows}
+    return recorded, {int(r["listing_id"]) for r in rows if r["given_up_at"]}
+
+
+def _record_failure(source: str, category: str, listing_id: int,
+                    url: str | None, reason: str) -> int:
+    """One more consecutive failure at `listing_id`. Returns the new count.
+
+    Stamps `given_up_at` as soon as the count reaches POLL_GIVE_UP_AFTER, so
+    the row itself says the poller stopped rather than leaving that to be
+    re-derived from a count against a setting that may since have changed.
+    COALESCE keeps the first such moment: when it was abandoned, not when it
+    was last looked at.
+    """
+    with connect() as cx:
+        cx.execute(
+            "INSERT INTO poll_failure(source,category,listing_id,url,failures,"
+            "reason,first_at,last_at) "
+            "VALUES(?,?,?,?,1,?,datetime('now'),datetime('now')) "
+            "ON CONFLICT(source,category,listing_id) DO UPDATE SET "
+            "failures=failures+1, url=excluded.url, reason=excluded.reason, "
+            "last_at=datetime('now')",
+            (source, category, listing_id, url, reason[:200]))
+        n = int(cx.execute(
+            "SELECT failures FROM poll_failure WHERE source=? AND category=? "
+            "AND listing_id=?", (source, category, listing_id)).fetchone()["failures"])
+        if n >= POLL_GIVE_UP_AFTER:
+            cx.execute(
+                "UPDATE poll_failure SET given_up_at=COALESCE(given_up_at,"
+                "datetime('now')) WHERE source=? AND category=? AND listing_id=?",
+                (source, category, listing_id))
+    return n
+
+
+def _clear_failure(source: str, category: str, listing_id: int) -> None:
+    """Forget a listing's failures because this run read it.
+
+    The count is of CONSECUTIVE failures. Without this, a listing that fails
+    once a week is abandoned after a few weeks of otherwise perfect service.
+    """
+    with connect() as cx:
+        cx.execute(
+            "DELETE FROM poll_failure WHERE source=? AND category=? AND listing_id=?",
+            (source, category, listing_id))
+
+
+def _give_up(key: str, category: str, listing_id: int, url: str | None,
+             reason: str, given_up: list[dict[str, Any]]) -> bool:
+    """Record this attempt; True once the poller has given up on the listing.
+
+    True means "step over it": the id is not a stall, so the cursor may pass
+    it and this category is unblocked. It is not a silent skip — the listing
+    is in poll_failure with its URL and the reason it last failed, the run's
+    log line names it, and GET /api/ingest/abandoned lists it. A listing
+    abandoned by mistake is recoverable by hand from that record; the paste
+    route takes the URL.
+    """
+    failures = _record_failure(key, category, listing_id, url, reason)
+    if failures < POLL_GIVE_UP_AFTER:
+        return False
+    log.warning("%s/%s: giving up on %s after %s failures (%s)",
+                key, category, listing_id, failures, reason)
+    given_up.append({"listing_id": listing_id, "url": url,
+                     "failures": failures, "reason": reason[:200]})
+    return True
 
 
 def _is_category_page(adapter: Any, html: str) -> bool:
@@ -149,9 +231,11 @@ async def _poll_category(source, adapter, key: str, category: str,
     """
     since = _cursor(key, category)
     created: list[dict[str, Any]] = []
+    given_up: list[dict[str, Any]] = []
     scanned = rejected = 0
     high = since
     fresh: dict[int, str] = {}
+    recorded, abandoned = _failed_before(key, category)
     pages_capped = False
 
     # Walk the category page by page. What the pages actually look like,
@@ -199,7 +283,7 @@ async def _poll_category(source, adapter, key: str, category: str,
             return {"status": "error", "http_status": status,
                     "scanned": 0, "rejected": 0, "created": [],
                     "pages_capped": False, "stalled_at": None,
-                    "listing_free_page": None}
+                    "listing_free_page": None, "given_up": []}
         if not _results_bounded(adapter, html):
             # The adapter could not tell this category's own results from the
             # site-wide newest-adverts block, so it read the whole page. Every
@@ -233,10 +317,25 @@ async def _poll_category(source, adapter, key: str, category: str,
         if page == POLL_MAX_PAGES:
             pages_capped = True
 
+    # Ids this category has already given up on are dropped here, at the batch,
+    # and not up in the walk: a page carrying nothing but abandoned ids must
+    # still read as "nothing new" the way it always did, or the walk ends early
+    # and takes the watermark with it. Dropping them here is what unblocks the
+    # category — an abandoned id is not fetched, so it cannot stall, so the
+    # cursor may pass it. See _give_up and the poll_failure table.
+    #
+    # The cursor is carried past an abandoned id by the next id that IS
+    # ingested, not by the abandonment itself — nothing here advances a
+    # watermark over an id no run decided about. So a category in which every
+    # fresh id has been abandoned holds its cursor until a readable listing
+    # appears above them, and then moves past the lot. That costs a list-page
+    # walk per run and nothing else: the abandoned ids are not fetched.
+    pending = {i: u for i, u in fresh.items() if i not in abandoned}
+
     # ids arrive newest-first. Process the OLDEST new ones first so the cursor
     # advances contiguously: a batch bigger than `limit` is then caught up over
     # successive runs instead of having its tail skipped.
-    batch = sorted(fresh.items())[:limit]
+    batch = sorted(pending.items())[:limit]
 
     # stalled_at marks the first id in this category's run that could not be
     # fully ingested (fetch failure or unparseable page). This category's
@@ -246,17 +345,25 @@ async def _poll_category(source, adapter, key: str, category: str,
     # same batch would silently carry the watermark past a listing that was
     # never actually ingested, losing it forever.
     #
-    # Known limitation, not solved here: a listing that fails *permanently*
-    # (e.g. deleted between the category page and the detail fetch, so it
-    # 404s every run) stalls that category's cursor at that id indefinitely,
-    # and everything above it is refetched on every run. Ingestion still
-    # works — _insert's fingerprint check makes the repeats a no-op — but the
-    # run does needless work. Fixing this needs per-id failure counts (give
-    # up after N consecutive stalls), which is out of scope for this task.
-    # It stalls one category only: the others keep advancing.
+    # A listing that fails PERMANENTLY used to stall its category at that id
+    # for good — deleted between the category page and the detail fetch, or a
+    # page this parser will never read. That was recorded here as a known
+    # limitation and it duly fired in production on both rinka categories:
+    # sodybos pinned at 4992805, namai at 4924114, refetching the same head
+    # every hour while nothing newer could ever be ingested.
+    #
+    # It is fixed by _give_up, not by weakening the rule above. The rule still
+    # holds for every id the poller is still trying: a failure stalls the
+    # cursor, and the id is offered again next run. Only after
+    # POLL_GIVE_UP_AFTER consecutive failures does the poller stop offering
+    # it — and that is a recorded act, not a skip: the listing sits in
+    # poll_failure with its URL, its failure count and the reason it last
+    # failed, this run's log line names it, and GET /api/ingest/abandoned
+    # lists it. What is never allowed is passing an id that was neither
+    # ingested nor abandoned.
     stalled_at = None
 
-    if (pages_capped or listing_free_page is not None) and fresh:
+    if (pages_capped or listing_free_page is not None) and pending:
         # Both exits stopped the walk part-way down a descending list
         # without proving where the category ends, so neither may advance
         # the watermark — that is the trap the early stop above fell into.
@@ -276,13 +383,14 @@ async def _poll_category(source, adapter, key: str, category: str,
         # standing still beats losing listings — but it must be loud, not
         # silent, which is why poll_source's log line names the setting to
         # raise rather than only reporting that the cap was reached.
-        stalled_at = min(fresh)
+        stalled_at = min(pending)
 
     for listing_id, url in batch:
         await asyncio.sleep(source.crawl_delay_s)
         st, page_html = await fetch(url)
         if st != 200:
-            if stalled_at is None:
+            if not _give_up(key, category, listing_id, url, f"HTTP {st}",
+                            given_up) and stalled_at is None:
                 stalled_at = listing_id
             continue
         scanned += 1
@@ -292,9 +400,20 @@ async def _poll_category(source, adapter, key: str, category: str,
             # (redirect, 404 body, teaser, error page inside the chrome) — a
             # failure to ingest just like a bad HTTP status, so it must not
             # let the cursor pass it either. See _is_the_listing.
-            if stalled_at is None:
+            declared = listing.get("listing_id")
+            if not _give_up(key, category, listing_id, url,
+                            f"puslapis neprisistato kaip šis skelbimas "
+                            f"(gauta: {declared!r})", given_up) \
+                    and stalled_at is None:
                 stalled_at = listing_id
             continue
+
+        # Read successfully, so this listing's consecutive-failure count is
+        # spent. Cleared here rather than after the profile check on purpose:
+        # a listing no profile wants was still read, and being read is what
+        # the count is about.
+        if listing_id in recorded:
+            _clear_failure(key, category, listing_id)
 
         from ..advisor import assess_nature       # local import: avoids a cycle
         from ..filters import evaluate_all, MATCH, NEAR
@@ -327,7 +446,8 @@ async def _poll_category(source, adapter, key: str, category: str,
 
     return {"status": "ok", "scanned": scanned, "rejected": rejected,
             "created": created, "pages_capped": pages_capped,
-            "stalled_at": stalled_at, "listing_free_page": listing_free_page}
+            "stalled_at": stalled_at, "listing_free_page": listing_free_page,
+            "given_up": given_up}
 
 
 async def poll_source(key: str, fetch: Fetch | None = None,
@@ -362,7 +482,7 @@ async def poll_source(key: str, fetch: Fetch | None = None,
             res = {"status": "error", "error": str(exc)[:400],
                    "scanned": 0, "rejected": 0, "created": [],
                    "pages_capped": False, "stalled_at": None,
-                   "listing_free_page": None}
+                   "listing_free_page": None, "given_up": []}
         per_category[category] = {k: v for k, v in res.items() if k != "created"}
         per_category[category]["created"] = len(res.get("created") or [])
         created.extend(res.get("created") or [])
@@ -392,6 +512,15 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     if stalls:
         detail += (f"; kursorius sustabdytas ({', '.join(stalls)})"
                    " — bus bandoma dar kartą")
+    abandoned = [f"{c} {g['listing_id']}" for c, r in per_category.items()
+                 for g in (r.get("given_up") or [])]
+    if abandoned:
+        # The one place a listing leaves the pipeline without being ingested.
+        # It must be said out loud, with the ids, and with where the full
+        # record lives — an abandonment nobody can see is the silent skip the
+        # contiguous-advance rule exists to prevent.
+        detail += (f"; atsisakyta po {POLL_GIVE_UP_AFTER} nesėkmių:"
+                   f" {', '.join(abandoned)} — žr. /api/ingest/abandoned")
     failed = [c for c, r in per_category.items() if r["status"] == "error"]
     if failed:
         detail += f"; nepavyko: {', '.join(failed)}"

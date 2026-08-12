@@ -865,6 +865,32 @@ async def ingest_poll() -> dict[str, Any]:
     return result
 
 
+@router.get("/ingest/abandoned")
+def ingest_abandoned(limit: int = 100) -> dict[str, Any]:
+    """Listings the poller could not ingest: what failed, and what was dropped.
+
+    `given_up_at` is set on the ones the poller has stopped retrying — the
+    only way a listing leaves the pipeline without being ingested, and the
+    reason this route exists. The rest are still being retried and are shown
+    alongside so a category about to abandon something is visible before it
+    does.
+
+    There is deliberately no "retry" button here. By the time a listing is
+    abandoned its category's cursor has moved past it, so clearing the row
+    would not re-offer it — it would only look like it had. The honest way
+    back is the URL in this record and the paste route.
+    """
+    with connect() as cx:
+        rows = cx.execute(
+            "SELECT * FROM poll_failure "
+            "ORDER BY given_up_at IS NULL, last_at DESC LIMIT ?",
+            (limit,)).fetchall()
+    items = [dict(r) for r in rows]
+    return {"items": items,
+            "given_up": sum(1 for r in items if r["given_up_at"]),
+            "retrying": sum(1 for r in items if not r["given_up_at"])}
+
+
 @router.get("/ingest/log")
 def ingest_log(limit: int = 25) -> dict[str, Any]:
     with connect() as cx:

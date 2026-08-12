@@ -104,6 +104,22 @@ def test_migrating_an_old_database_preserves_existing_rows(old_database):
     assert row["source_category"] is None
 
 
+def test_migrating_an_old_database_creates_the_failure_ledger(old_database):
+    """poll_failure arrives as a new table, not a new column.
+
+    `CREATE TABLE IF NOT EXISTS` in SCHEMA is additive in exactly the way
+    MIGRATIONS is — it runs on every boot and touches nothing that exists —
+    but a table missing from a live database is a different failure from a
+    missing column: every poll would raise instead of returning a null, so it
+    is worth its own test on a database that predates it.
+    """
+    db_module.init_db()
+    with db_module.connect() as cx:
+        cols = {r["name"] for r in cx.execute("PRAGMA table_info(poll_failure)")}
+    assert {"source", "category", "listing_id", "url", "failures", "reason",
+            "given_up_at"} <= cols
+
+
 def test_migrating_twice_is_a_no_op(old_database):
     db_module.init_db()
     db_module.init_db()

@@ -55,6 +55,18 @@ def _detail_for(url, detail=None):
 
 
 @pytest.fixture(autouse=True)
+def _no_failures():
+    """Consecutive-failure counts must not leak between tests.
+
+    Several tests here fail the same id on purpose, and three consecutive
+    failures is all it takes for the poller to give up on a listing — which
+    would quietly change what the next test is measuring."""
+    from backend.app.db import connect
+    with connect() as cx:
+        cx.execute("DELETE FROM poll_failure")
+
+
+@pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
     """Same reason as test_poller.py: a real 2s pause per fetch, and there are
     several list pages plus a detail page per category here, would make this

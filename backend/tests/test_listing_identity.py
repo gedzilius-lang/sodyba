@@ -168,6 +168,7 @@ def _reset():
     with connect() as cx:
         cx.execute("DELETE FROM source_category_cursor")
         cx.execute("DELETE FROM candidate")
+        cx.execute("DELETE FROM poll_failure")
 
 
 @pytest.fixture(autouse=True)

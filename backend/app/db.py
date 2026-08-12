@@ -137,6 +137,42 @@ WHERE c.source = 'rinka' AND NOT EXISTS (
     WHERE sc.source = c.source AND sc.category = 'sodybos'
 );
 
+-- Listings the poller could not ingest, and what became of them.
+--
+-- The contiguous-advance rule in poller._poll_category is what stops a
+-- listing being silently skipped: once an id fails, that category's cursor
+-- may not pass it, so it is offered again next run. A listing that fails
+-- PERMANENTLY -- deleted between the category page and the detail fetch, or
+-- a page this parser will never understand -- therefore pins its category at
+-- that id for good. That is what happened in production: sodybos stuck at
+-- 4992805, namai at 4924114, every run, refetching the same head hourly.
+--
+-- So the poller gives up after SR_POLL_GIVE_UP_AFTER consecutive failures and
+-- steps over the id. Giving up is only acceptable if it is visible, and this
+-- table is the record: which listing, which category, its URL, how many times
+-- it failed, why it failed last, and when the poller stopped. Nothing is
+-- dropped silently -- GET /api/ingest/abandoned reads this, and the run's own
+-- log line names the ids as they are abandoned.
+--
+-- `failures` counts CONSECUTIVE failures: a run that reads the page deletes
+-- the row, so one bad afternoon does not leave a listing permanently closer
+-- to being abandoned. The rule stays intact -- a listing is stepped over only
+-- once it has been tried, recorded and reported, never merely skipped.
+CREATE TABLE IF NOT EXISTS poll_failure (
+    source      TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    listing_id  INTEGER NOT NULL,
+    url         TEXT,
+    failures    INTEGER NOT NULL DEFAULT 0,
+    reason      TEXT,
+    first_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    last_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    given_up_at TEXT,
+    PRIMARY KEY (source, category, listing_id)
+);
+CREATE INDEX IF NOT EXISTS ix_poll_failure_given_up
+    ON poll_failure(source, category, given_up_at);
+
 CREATE TABLE IF NOT EXISTS refresh_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     source     TEXT NOT NULL,

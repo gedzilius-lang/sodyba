@@ -79,6 +79,25 @@ POLL_MAX_PER_RUN = int(os.getenv("SR_POLL_MAX_PER_RUN", "40"))
 # and the run says so in its log line rather than failing quietly.
 POLL_MAX_PAGES = int(os.getenv("SR_POLL_MAX_PAGES", "5"))
 
+# How many consecutive runs a single listing may fail before the poller stops
+# offering it and lets its category's cursor past.
+#
+# The contiguous-advance rule is what stops a listing being silently skipped,
+# so a listing that fails permanently pins its whole category at that id. Both
+# rinka categories were pinned in production before this existed. Giving up is
+# the only way out, and it is safe only because it is recorded: every attempt,
+# and the giving-up itself, lands in the poll_failure table and in the run's
+# log line (see db.py and poller._give_up).
+#
+# Three, at the default SR_POLL_MINUTES=60, is about three hours of retrying.
+# It is deliberately not 1: a single failure is usually a timeout, a 502 or a
+# moment of rate limiting, and abandoning a good listing costs more than a few
+# wasted fetches. It is deliberately not 20 either: until the poller steps over
+# the id, NOTHING newer in that category is ever ingested, so a long threshold
+# is a long outage. A category-wide outage cannot trip it, because a list page
+# that fails ends the run before any detail is fetched.
+POLL_GIVE_UP_AFTER = int(os.getenv("SR_POLL_GIVE_UP_AFTER", "3"))
+
 # ---------------------------------------------------------------- notify
 TELEGRAM_TOKEN = os.getenv("SR_TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("SR_TELEGRAM_CHAT_ID", "")
