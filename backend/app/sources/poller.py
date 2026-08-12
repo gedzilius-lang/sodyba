@@ -84,7 +84,8 @@ async def poll_source(key: str, fetch: Fetch | None = None,
     high = since
 
     try:
-        status, html = await fetch(adapter.list_url())
+        # One category for now; Task 3 makes this loop over adapter.CATEGORIES.
+        status, html = await fetch(adapter.list_url("sodybos"))
         if status != 200:
             log_refresh(key, "error", f"sąrašo puslapis grąžino {status}", 0, started)
             return {"status": "error", "http_status": status}

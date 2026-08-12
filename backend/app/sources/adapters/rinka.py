@@ -4,8 +4,12 @@ robots.txt is `User-agent: * / Disallow:` -- fully open. Verified 2026-08-10 and
 recorded in sources/registry.py.
 
 Structure verified against a live listing the same day:
+  * the host serves several property categories, each at its own path under
+    /nekilnojamojo-turto-skelbimai/ -- see CATEGORIES. robots.txt is a
+    property of the host, not of a path, so they share one registry entry and
+    one crawl delay, and the category is named per call to list_url();
   * listing URLs are /skelbimas/<slug>-id-<N>, N numeric and descending, which
-    is why the poller only needs a high-water mark;
+    is why the poller only needs a high-water mark per category;
   * price renders as `Kaina: 60000,00 &euro;` inside <span class="price">;
   * the page nav lists every municipality in the country, so municipality is
     taken from the <h1> and the content block, never from the whole document.
@@ -38,7 +42,17 @@ from .. import parsers
 
 KEY = "rinka"
 BASE = "https://www.rinka.lt"
-CATEGORY = "/nekilnojamojo-turto-skelbimai/parduodamos-sodybos"
+# One host, one robots.txt, one crawl delay -- so one registry entry (see
+# sources/registry.py). Categories are a path concern and live here, which is
+# why adding one costs nothing and cannot weaken the policy check.
+CATEGORIES = {
+    "sodybos": "/nekilnojamojo-turto-skelbimai/parduodamos-sodybos",
+    "namai": "/nekilnojamojo-turto-skelbimai/parduodami-namai",
+}
+
+
+class UnknownCategory(KeyError):
+    """A category key this adapter does not declare."""
 
 _LINK_RE = re.compile(r'href="(https://www\.rinka\.lt/skelbimas/[^"?#]*?-id-(\d+))"')
 _H1_RE = re.compile(r"(?is)<h1[^>]*>(.*?)</h1>")
@@ -107,8 +121,12 @@ def _label_value(m: re.Match | None) -> str | None:
     return v if v and v != "-" else None
 
 
-def list_url(page: int = 1, per_page: int = 200) -> str:
-    return f"{BASE}{CATEGORY}?page={page}&per_page={per_page}"
+def list_url(category: str, page: int = 1, per_page: int = 200) -> str:
+    try:
+        path = CATEGORIES[category]
+    except KeyError:
+        raise UnknownCategory(category) from None
+    return f"{BASE}{path}?page={page}&per_page={per_page}"
 
 
 def list_ids(html: str) -> list[tuple[int, str]]:

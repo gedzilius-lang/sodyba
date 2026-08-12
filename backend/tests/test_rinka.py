@@ -55,7 +55,7 @@ def _labelled_detail_html(muni_value: str, locality_value: str = "Plateliai") ->
 
 
 def test_list_url_is_paginated():
-    assert rinka.list_url(1, 200).endswith("?page=1&per_page=200")
+    assert rinka.list_url("sodybos", 1, 200).endswith("?page=1&per_page=200")
 
 
 def test_list_ids_finds_listings_only():
