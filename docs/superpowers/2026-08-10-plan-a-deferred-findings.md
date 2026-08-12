@@ -202,3 +202,18 @@ confident wrong value rather than an honest `None`?**
   wrong value this project ranks first. The rows are few and visible: any
   candidate whose asking price or type looks unlike a homestead is a
   candidate for this. Delete or archive them by hand if they turn up.
+
+- **E9** — the poller tells "this category has no more pages" from "the site
+  answered with something else" by a positive landmark: the results-count
+  block and the pagination widget that rinka's category controller renders on
+  every category page, results or not. Measured 2026-08-13, a request for a
+  category that does not exist renders the full site chrome — newest-adverts
+  block included — with neither landmark, which is what makes the test work.
+
+  The limit: an error page that reproduced the category's own results
+  furniture would be indistinguishable, and would end the walk. No such page
+  was observed; rinka answers a missing category with 404 (already refused on
+  status) and an out-of-range page with 500. Closing it properly needs a
+  second source of truth for "how many results does this category have" —
+  the count in that block is one — and that is a bigger change than this
+  branch should carry.

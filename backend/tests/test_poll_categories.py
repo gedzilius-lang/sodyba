@@ -1,6 +1,7 @@
 """Multi-category polling: every category advances on its own, and a listing
 below another category's watermark is still ingested."""
 import asyncio
+import pathlib
 
 import pytest
 
@@ -346,6 +347,75 @@ def test_a_category_with_nothing_new_is_not_mistaken_for_a_failure(monkeypatch):
     assert not any("/skelbimas/" in c for c in calls), "nothing new to fetch"
     assert len(calls) == 2, \
         f"one list page per category and no more, got {calls}"
+
+
+# ------------------------------------------------- real pages, end to end
+# Every other fetcher in this file serves bare <a> links. That is enough to
+# exercise the watermark arithmetic and nothing else: such a page carries no
+# newest-adverts block and no results furniture, so the pair that actually
+# matters -- zero results on a genuine page versus zero results on a page the
+# category never rendered -- never reached _poll_category at all. Replacing
+# the guard with a constant left the whole suite green. These two drive the
+# saved pages through poll_source instead.
+_FIX = pathlib.Path(__file__).parent / "fixtures"
+LIVE_SODYBOS = (_FIX / "rinka_category_live.html").read_text(encoding="utf-8")
+PAST_END = (_FIX / "rinka_category_past_end.html").read_text(encoding="utf-8")
+NOT_FOUND = (_FIX / "rinka_category_not_found.html").read_text(encoding="utf-8")
+
+
+def _real_page_fetcher(page_two):
+    """sodybos: a real results page, then `page_two`. namai stays quiet."""
+    calls = []
+
+    async def fetch(url):
+        calls.append(url)
+        if "/skelbimas/" in url:
+            return (200, DETAIL)
+        if "parduodamos-sodybos" in url:
+            return (200, LIVE_SODYBOS if "page=1" in url else page_two)
+        return (200, _listing_page([QUIET_ID]))
+
+    return fetch, calls
+
+
+def test_a_real_past_the_end_page_ends_the_walk_and_advances_the_cursor(monkeypatch):
+    """Zero results on a page the category itself rendered is the ordinary
+    end of the walk. If this stalls, the poller never advances at all --
+    sodybos is 86 listings in one page, so it meets this on every run."""
+    poller._save_cursor("rinka", "sodybos", 0)
+    poller._save_cursor("rinka", "namai", QUIET_ID)
+    fetch, calls = _real_page_fetcher(PAST_END)
+    monkeypatch.setattr(poller, "_profiles", lambda: [])
+    out = asyncio.run(poller.poll_source("rinka", fetch=fetch, limit=40))
+
+    r = out["categories"]["sodybos"]
+    assert r["listing_free_page"] is None, "a real category page read as a failure"
+    assert r["stalled_at"] is None
+    assert r["scanned"] == 4, "the saved page's four results were not ingested"
+    assert poller._cursor("rinka", "sodybos") == 5080474
+    assert not any("page=3" in c for c in calls), "the walk did not stop"
+
+
+def test_a_real_error_page_inside_the_chrome_stalls_rather_than_ending(monkeypatch):
+    """The same zero results, from a page the category did not render. The
+    newest-adverts block is chrome and is present here too, so nothing about
+    the listing markup separates this from the case above -- only the results
+    furniture does. Ending the walk here would advance the watermark over
+    every id on the pages behind it."""
+    poller._save_cursor("rinka", "sodybos", 0)
+    poller._save_cursor("rinka", "namai", QUIET_ID)
+    fetch, _ = _real_page_fetcher(NOT_FOUND)
+    monkeypatch.setattr(poller, "_profiles", lambda: [])
+    out = asyncio.run(poller.poll_source("rinka", fetch=fetch, limit=40))
+
+    r = out["categories"]["sodybos"]
+    assert r["listing_free_page"] == 2
+    assert r["stalled_at"] is not None
+    assert poller._cursor("rinka", "sodybos") == 0, \
+        "the cursor advanced over pages the run never reached"
+    # Page 1's results are still ingested -- only the watermark is withheld.
+    assert r["scanned"] == 4
+    assert "be skelbimų" in _last_log()[1]
 
 
 def test_one_category_failing_does_not_stop_the_other(monkeypatch):

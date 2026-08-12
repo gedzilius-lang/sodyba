@@ -101,6 +101,28 @@ _LINK_RE = re.compile(r'href="(https://www\.rinka\.lt/skelbimas/[^"?#]*?-id-(\d+
 _ADS_BLOCK_RE = re.compile(r'(?is)<div[^>]*\bid="adsBlock"[^>]*>')
 _CARDS_CLASS_RE = re.compile(r'(?i)\bclass="[^"]*\bcards\b')
 _HEADING_AFTER_RE = re.compile(r"(?is)\s*<h[1-6]\b")
+
+# The category-results controller's own furniture: the block carrying the
+# result count ("Rasta 86 skelbimų") and the pagination widget beside it.
+#
+# This is what tells a real category page from the site answering with
+# something else inside the same chrome, and it has to be a POSITIVE signal.
+# The newest-adverts block above is site-wide chrome -- measured 2026-08-13,
+# a request for a category path that does not exist renders the full layout,
+# newest-adverts block included, with no results furniture at all. So
+# "the page had some listing markup" cannot mean "the category answered":
+# that reading makes an error page look like an empty category, which lets
+# the walk end early and the watermark advance over pages never fetched.
+#
+# Either element is accepted. Both were present on every real category page
+# measured -- results pages and pages past the end of a category alike, since
+# the same controller renders both -- and neither was present on the error
+# page, so requiring only one survives a rename without weakening the test.
+# No Lithuanian text is matched: the class names alone separate the cases,
+# so the "Rasta"/"Puslapis" wording stays out of it, as the nav dropdown and
+# the seller-adverts heading do elsewhere in this file.
+_RESULTS_CONTROL_RE = re.compile(r'(?i)<div[^>]*\bclass="[^"]*\blistControlBlock\b')
+_PAGGING_RE = re.compile(r'(?i)<[a-z]+[^>]*\bclass="[^"]*\bpagging\b')
 _H1_RE = re.compile(r"(?is)<h1[^>]*>(.*?)</h1>")
 _H1_OPEN_RE = re.compile(r"(?i)<h1\b")
 _CONTENT_MARK = 'class="price"'
@@ -176,14 +198,33 @@ def list_url(category: str, page: int = 1, per_page: int = 200) -> str:
 
 
 def _newest_block_start(html: str) -> int | None:
-    """Offset where the site-wide newest-adverts block opens, or None."""
+    """Offset where the site-wide newest-adverts block opens, or None.
+
+    None also means "do not cut": see the layout check at the end. Cutting on
+    a page laid out differently from every one measured would silently yield
+    zero listings, and a silent zero is the failure this file exists to
+    avoid, so the ambiguous case falls back to reading the whole page.
+    """
     text = html or ""
+    start = None
     for m in _ADS_BLOCK_RE.finditer(text):
         if _CARDS_CLASS_RE.search(m.group(0)):
             continue                       # the results container itself
         if _HEADING_AFTER_RE.match(text, m.end()):
-            return m.start()
-    return None
+            start = m.start()
+            break                          # the FIRST one: everything after
+            #                                it is the block and whatever
+            #                                follows the block, never results
+    if start is None:
+        return None
+    for m in _ADS_BLOCK_RE.finditer(text):
+        if _CARDS_CLASS_RE.search(m.group(0)) and m.start() > start:
+            # The results container opens BELOW the newest block. Every page
+            # measured has it above, so this layout is one we do not
+            # understand -- cutting here would discard the results entirely
+            # and report a healthy empty category forever.
+            return None
+    return start
 
 
 def results_bounded(html: str) -> bool:
@@ -197,16 +238,20 @@ def results_bounded(html: str) -> bool:
     return _newest_block_start(html) is not None
 
 
-def is_list_page(html: str) -> bool:
-    """Whether this response was one of the site's list pages at all.
+def is_category_page(html: str) -> bool:
+    """Whether the site's category-results controller rendered this page.
 
-    The poller needs this apart from list_ids(): once the newest block is
-    excluded, a page past the end of a category yields zero ids legitimately,
-    and that must not be confused with a rate limiter or maintenance notice
-    wearing a 200. Either landmark is enough — any listing link at all, or
-    the newest block — so a redesign that moves one still reads as a page.
+    The poller needs this apart from list_ids(): once the newest-adverts
+    block is excluded, a page past the end of a category yields zero ids
+    legitimately, and that must be told apart from the site answering with
+    something else inside the same chrome. Only a page this returns True for
+    may end the walk on zero results; anything else stalls it.
+
+    Deliberately NOT "does the page contain listing markup". The newest
+    block is chrome and renders on error pages too — see _RESULTS_CONTROL_RE.
     """
-    return bool(_LINK_RE.search(html or "")) or _newest_block_start(html) is not None
+    text = html or ""
+    return bool(_RESULTS_CONTROL_RE.search(text) or _PAGGING_RE.search(text))
 
 
 def list_ids(html: str) -> list[tuple[int, str]]:

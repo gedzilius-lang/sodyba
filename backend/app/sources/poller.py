@@ -58,13 +58,14 @@ def _save_cursor(source: str, category: str, last_id: int) -> None:
             (source, category, str(last_id)))
 
 
-def _is_list_page(adapter: Any, html: str) -> bool:
-    """Whether a 200 was a list page at all, per the adapter that knows.
+def _is_category_page(adapter: Any, html: str) -> bool:
+    """Whether the source's own category listing answered, per the adapter.
 
-    Adapters that do not answer keep the old proxy — any listing link means
-    it was a page — so adding this cannot change their behaviour.
+    Only a page this is true of may end the walk on zero results. Adapters
+    that do not answer keep the old proxy — any listing link means it was a
+    page — so adding this cannot change their behaviour.
     """
-    fn = getattr(adapter, "is_list_page", None)
+    fn = getattr(adapter, "is_category_page", None)
     return bool(fn(html)) if fn else bool(adapter.list_ids(html))
 
 
@@ -162,16 +163,21 @@ async def _poll_category(source, adapter, key: str, category: str,
             log.warning("%s/%s page %s: could not bound the results block, "
                         "reading every id on the page", key, category, page)
         all_ids = adapter.list_ids(html)
-        if not all_ids and not _is_list_page(adapter, html):
-            # No listing markup whatsoever. A real page always carries some,
-            # so this is a rate limiter, a maintenance notice, or a render
-            # this parser does not understand — wearing a 200. Reading it as
-            # the end of the category would advance the watermark over every
-            # lower id on the pages behind it, so it is a stall instead.
+        if not all_ids and not _is_category_page(adapter, html):
+            # Zero results, and the source's own category listing is not what
+            # answered: a rate limiter, a maintenance notice, or an error page
+            # rendered inside the site's chrome, wearing a 200. Reading that
+            # as the end of the category would advance the watermark over
+            # every lower id on the pages behind it, so it is a stall.
             #
-            # `not all_ids` alone will not do: once the newest-adverts block
-            # is excluded, a page past the end of a category yields zero ids
-            # legitimately, and that is the ordinary end of the walk.
+            # The test has to be this positive landmark, not "the page had
+            # some listing markup". Measured 2026-08-13, rinka renders a
+            # missing category inside the full layout with its newest-adverts
+            # block intact, so listing markup is present on pages that carry
+            # no results at all. And `not all_ids` alone will not do either:
+            # a page past the end of a category legitimately yields zero ids
+            # now that the newest block is excluded, and that is the ordinary
+            # end of the walk.
             listing_free_page = page
             break
         before = len(fresh)

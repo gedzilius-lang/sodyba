@@ -104,11 +104,32 @@ def _ids(html):
     return {i for i, _ in rinka.list_ids(html)}
 
 
+def _all_ids(html):
+    """Every listing link on the page, block included -- what list_ids
+    returned before the block was excluded."""
+    return {(int(n), u) for u, n in
+            re.findall(r'href="(https://www\.rinka\.lt/skelbimas/[^"?#]*?-id-(\d+))"', html)}
+
+
+# What the PRUNED fixtures in this repo hold, so a count regression is
+# visible without leaving the repository. The unpruned pages, measured
+# 2026-08-12 and not reproducible from here, were:
+#     sodybos page 1   96 links -> 86 results + 10 newest
+#     namai   page 1  208 links -> 200 results + 10 newest
+#     namai   page 2  162 links -> 152 results + 10 newest
+#     either category past the end  10 links ->  0 results
+PRUNED_SODYBOS_RESULTS = 4
+PRUNED_NAMAI_RESULTS = 4
+
+
 def test_the_newest_adverts_block_is_not_read_as_sodybos_results():
     ids = _ids(LIVE_SODYBOS)
     assert ids, "the results were dropped entirely"
     assert not (ids & NEWEST_BLOCK_IDS), \
         f"site-wide newest adverts read as category results: {ids & NEWEST_BLOCK_IDS}"
+    assert len(ids) == PRUNED_SODYBOS_RESULTS
+    assert len({i for i, _ in _all_ids(LIVE_SODYBOS)}) == \
+        PRUNED_SODYBOS_RESULTS + len(NEWEST_BLOCK_IDS)
 
 
 def test_the_newest_adverts_block_is_not_read_as_namai_results():
@@ -117,11 +138,14 @@ def test_the_newest_adverts_block_is_not_read_as_namai_results():
     ids = _ids(LIVE_NAMAI)
     assert ids, "the results were dropped entirely"
     assert (ids & NEWEST_BLOCK_IDS) == ALSO_REAL_NAMAI
+    assert len(ids) == PRUNED_NAMAI_RESULTS
 
 
 def test_a_page_past_the_end_of_a_category_has_no_results():
     assert _ids(PAST_END) == set(), \
         "the newest-adverts block was read as if the category still had results"
+    assert {i for i, _ in _all_ids(PAST_END)} == NEWEST_BLOCK_IDS, \
+        "the fixture is no longer the newest-adverts block alone"
 
 
 def test_the_boundary_is_reported_as_found_on_a_real_page():
@@ -161,11 +185,72 @@ def test_a_renamed_results_class_still_excludes_the_newest_block():
     assert _ids(html) == {77}
 
 
-def test_is_list_page_tells_an_empty_category_from_a_failed_response():
-    """Once the newest block is excluded a page past the end yields zero ids
-    legitimately. The poller must not read that as a rate limiter."""
-    assert rinka.is_list_page(PAST_END) is True
-    assert rinka.is_list_page("<h1>Per daug užklausų</h1>") is False
+# rinka_category_not_found.html is the body rinka served on 2026-08-13 for a
+# category path that does not exist, pruned the same way (8 of its 10 advert
+# blocks removed). It is the evidence that the site renders a page carrying
+# NO results inside its full chrome, newest-adverts block and all. That body
+# arrived with a 404, which the poller already refuses on status alone; it is
+# used here as the *shape* a 200 would have if a WAF, a maintenance notice or
+# a redirect ever rendered inside the same chrome. No such 200 was observed,
+# so this is the closest real evidence rather than a captured instance.
+NOT_FOUND = (FIX / "rinka_category_not_found.html").read_text(encoding="utf-8")
+
+
+def test_a_category_page_is_told_by_its_results_furniture():
+    """A page past the end of a category yields zero ids legitimately, so the
+    walk may end on it. An error page inside the same chrome must not end the
+    walk -- and it also yields zero ids, so the difference has to come from a
+    positive landmark rather than from the absence of listings."""
+    assert rinka.is_category_page(LIVE_SODYBOS) is True
+    assert rinka.is_category_page(PAST_END) is True
+    assert rinka.is_category_page(NOT_FOUND) is False
+    assert rinka.is_category_page("<h1>Per daug užklausų</h1>") is False
+
+
+def test_the_error_page_still_looks_like_it_has_listings():
+    """Why the old proxy had to go: the newest-adverts block is chrome, so it
+    renders on a page with no results at all. Anything keying on 'the page
+    had some listing markup' reads this as an empty category."""
+    assert "adsBlock" in NOT_FOUND
+    assert re.search(r"/skelbimas/[^\"]*-id-\d+", NOT_FOUND), \
+        "the fixture no longer carries the newest-adverts block"
+    assert rinka.list_ids(NOT_FOUND) == [], "an error page has no results"
+
+
+def test_either_landmark_alone_identifies_a_category_page():
+    """Both signals are present on every real category page, so neither is
+    load-bearing alone -- but each must be sufficient, or renaming one would
+    stall every category at once."""
+    control_only = '<div class="listControlBlock hidden-xs">Rasta 3</div>'
+    pagging_only = '<ul class="pagging pull-right"><li>1</li></ul>'
+    assert rinka.is_category_page(control_only) is True
+    assert rinka.is_category_page(pagging_only) is True
+    assert rinka.is_category_page("<div class='other'>x</div>") is False
+
+
+def test_the_cut_is_taken_at_the_first_newest_block_not_the_last():
+    """Everything after the first such block is the block and whatever
+    follows it -- never results. Cutting at the last would let an earlier
+    block's adverts through."""
+    html = ('<div id="adsBlock" class="cards clearfix">'
+            '<a href="https://www.rinka.lt/skelbimas/x-id-77">x</a></div>'
+            '<div id="adsBlock"><h2>Naujausi skelbimai</h2>'
+            '<a href="https://www.rinka.lt/skelbimas/y-id-98">y</a></div>'
+            '<div id="adsBlock"><h2>Kiti skelbimai</h2>'
+            '<a href="https://www.rinka.lt/skelbimas/z-id-99">z</a></div>')
+    assert _ids(html) == {77}
+
+
+def test_a_newest_block_above_the_results_is_not_cut_at_all():
+    """If the block ever renders above the results, cutting at it discards
+    every listing on the page -- and a silent zero reads as a healthy empty
+    category forever. Fall back to the whole page and flag it instead."""
+    html = ('<div id="adsBlock"><h2>Naujausi skelbimai</h2>'
+            '<a href="https://www.rinka.lt/skelbimas/y-id-99">y</a></div>'
+            '<div id="adsBlock" class="cards clearfix">'
+            '<a href="https://www.rinka.lt/skelbimas/x-id-77">x</a></div>')
+    assert rinka.results_bounded(html) is False
+    assert _ids(html) == {77, 99}, "the results were dropped"
 
 
 def test_parse_detail_reads_the_price():
